@@ -1,0 +1,2381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ocean View</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a3b5c; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; }
+  canvas:active { cursor: grabbing; }
+  #hint {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    padding: 8px 14px; border-radius: 999px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    font: 13px/1.4 system-ui, -apple-system, sans-serif; color: #fff; text-align: center;
+    background: rgba(0, 30, 50, 0.35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    pointer-events: none; transition: opacity 1.5s ease;
+  }
+
+  #gear {
+    position: fixed; right: 16px; bottom: 16px; width: 42px; height: 42px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer; color: #fff;
+    background: rgba(8, 22, 34, 0.45); border: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    transition: background 0.2s;
+  }
+  #gear:hover, #sound:hover, #photo:hover { background: rgba(8, 22, 34, 0.7); }
+  body.shooting #hint, body.shooting #gear, body.shooting #sound, body.shooting #photo, body.shooting #panel { visibility: hidden; }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity 0.6s ease; }
+  #sound, #photo {
+    position: fixed; right: 16px; bottom: 68px; width: 42px; height: 42px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer; font-size: 17px; padding: 0;
+    background: rgba(8, 22, 34, 0.45); border: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background 0.2s;
+  }
+  #photo { bottom: 120px; }
+
+  #panel {
+    position: fixed; top: 16px; right: 16px; width: 300px; max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box;
+    padding: 14px 16px 16px; border-radius: 14px; color: #e9f1f5;
+    font: 13px/1.35 system-ui, -apple-system, sans-serif;
+    background: rgba(8, 22, 34, 0.62); border: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  #panel.hidden { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+  #panel .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  #panel h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+  #fps { margin-left: auto; font-size: 12px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+  #panel .x { background: none; border: 0; color: inherit; font-size: 18px; line-height: 1; cursor: pointer; opacity: 0.7; padding: 0 2px; }
+  #panel .x:hover { opacity: 1; }
+  .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .presets button {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 7px 4px; border-radius: 8px; cursor: pointer; color: inherit; font: inherit; font-size: 12px;
+    background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .presets button .ic { font-size: 18px; line-height: 1.1; }
+  .presets button:hover { background: rgba(255, 255, 255, 0.15); }
+  .presets button[aria-pressed="true"] { background: rgba(95, 212, 224, 0.22); border-color: rgba(95, 212, 224, 0.65); }
+  .wide {
+    width: 100%; margin-top: 12px; padding: 7px 8px; border-radius: 8px; cursor: pointer;
+    color: inherit; font: inherit; font-size: 12px;
+    background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .wide:hover { background: rgba(255, 255, 255, 0.15); }
+  .wide[aria-pressed="true"] { background: rgba(95, 212, 224, 0.22); border-color: rgba(95, 212, 224, 0.65); }
+  #auto, #realsky { margin-top: 8px; }
+  #realinfo { margin-top: 6px; font-size: 11.5px; opacity: 0.65; text-align: center; font-variant-numeric: tabular-nums; }
+  .section { margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.5; }
+  #sliders { margin-top: 14px; }
+  details.group { border-top: 1px solid rgba(255, 255, 255, 0.08); }
+  details.group summary {
+    display: flex; justify-content: space-between; align-items: center; list-style: none;
+    padding: 10px 2px; cursor: pointer; user-select: none;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6;
+  }
+  details.group summary::-webkit-details-marker { display: none; }
+  details.group summary::after { content: '›'; font-size: 16px; line-height: 1; transition: transform 0.2s; }
+  details.group[open] summary::after { transform: rotate(90deg); }
+  details.group summary:hover { opacity: 0.9; }
+  details.group[open] { padding-bottom: 6px; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; margin: 9px 0; }
+  .row label { opacity: 0.88; }
+  .row output { font-size: 12px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+  .row input { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: #5fd4e0; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="flash"></div>
+<div id="hint">W A S D / arrows to move · drag to look · E / Q up &amp; down (Q at the surface to dive) · Shift faster · H settings · M sound · P photo</div>
+<button id="photo" aria-label="Save a photo" title="Save a photo (P)">📷</button>
+<button id="sound" aria-label="Sound on or off" title="Sound (M)">🔊</button>
+<button id="gear" aria-label="Settings" title="Settings (H)">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+    <circle cx="9" cy="6" r="2" fill="#123"/><circle cx="15" cy="12" r="2" fill="#123"/><circle cx="7" cy="18" r="2" fill="#123"/>
+  </svg>
+</button>
+<div id="panel" class="hidden">
+  <div class="head"><h2>Ocean settings</h2><span id="fps"></span><button class="x" id="close" aria-label="Close">×</button></div>
+  <div class="section">Weather</div>
+  <div class="presets" id="weather"></div>
+  <button id="auto" class="wide" aria-pressed="false" title="Weather changes by itself every minute or so">🔄 Live weather</button>
+  <div class="section">Time of day</div>
+  <div class="presets" id="times"></div>
+  <button id="realsky" class="wide" aria-pressed="false" title="Sun, moon and stars where they really are, for your location and time">📍 Real sky now</button>
+  <div id="realinfo" hidden></div>
+  <div id="sliders"></div>
+  <button id="reset" class="wide">Reset to default</button>
+</div>
+
+<script id="vs" type="x-shader/x-vertex">
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2  uRes;
+uniform float uTime;
+uniform vec2  uLook;    // yaw, pitch
+uniform vec3  uPos;     // camera position
+uniform vec3  uSun;     // sun direction (normalized)
+uniform vec4  uWave;    // peak amplitude, peak wavenumber, wind direction (rad), choppiness
+uniform vec4  uWater;   // foam, murkiness, depth scale, wind speed (m/s)
+uniform vec3  uSky;     // cloud amount, cloud time, exposure
+uniform vec4  uWeather; // rain, fog density, gloom, lightning flash
+uniform vec4  uBolt;    // lightning bolt x, z, visible, seed
+uniform vec4  uPrecip;  // snow, hail, dust, rainbow
+uniform vec4  uSpout;   // waterspout x, z, strength
+uniform vec4  uWind;    // accumulated wind drift x, z, blowing veils
+uniform vec4  uNight;   // northern lights, glowing plankton, shooting stars
+uniform vec4  uStars;   // moon phase (0 new .. 1 full), stars & milky way, air traffic, satellites
+uniform sampler2D uTex; // cloud pass: last frame's clouds; main pass: this frame's clouds
+uniform vec4  uCloudView; // previous yaw, previous pitch, frame number, history valid
+uniform vec2  uCloudRes;  // size of the cloud buffer
+uniform vec4  uBoatA;   // sailboat x, z, heading, type
+uniform vec4  uBoatB;   // cargo ship x, z, heading, type
+uniform vec4  uBirds[6]; // seagull x, y, z, wing pose
+uniform vec2  uLife;    // boats visible, gulls visible
+uniform vec4  uMoon;    // real moon direction, 1 when the real sky is on
+uniform vec3  uMoonSun; // true sun direction (unclamped) for lighting the moon's phase
+uniform mat3  uSkyRot;  // local sky -> celestial (equatorial) frame, turns the stars with the earth
+
+// lighting set up once per pixel in main()
+vec3  SUN;
+vec3  SUN_COL;  // direct sunlight colour * intensity
+vec3  SKY_AMB;  // overall sky brightness / tint
+float DAY;
+vec3  MOON;
+vec3  MOON_COL;
+vec3  RO;       // camera position
+float PX;       // angular size of one pixel (radians)
+
+// ---------- noise ----------
+float hash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p = m * p; a *= 0.5; }
+  return v;
+}
+
+// ---------- waves: returns (height, dh/dx, dh/dz) ----------
+// The wavelengths are fixed; wind only changes how much energy each one carries,
+// so the sea can change smoothly with the weather without waves sliding around.
+const float K_BASE = 0.04683; // longest wave ~134 m
+float CREST; // 0 trough .. 1 crest of the big waves, set by waves()
+vec3 waves(vec2 p, float t, float dist) {
+  float h = 0.0, cr = 0.0;
+  vec2 g = vec2(0.0);
+  float A = uWave.x, kp = uWave.y, chop = uWave.w;
+  float sharp = 0.6 + 0.4 * chop;                    // peakier crests
+  float gam = -log(0.58 + 0.06 * chop) / log(1.52);  // rougher small-scale chop
+  // two extra long swells below K_BASE only carry energy in hurricane-force wind
+  float k = K_BASE / (1.52 * 1.52);
+  for (int j = 0; j < 19; j++) {
+    int i = j - 2;
+    // skip wavelengths too small to resolve at this distance
+    float fade = clamp((6.2832 / k) / (dist * 0.012 + 0.001) - 0.5, 0.0, 1.0);
+    if (fade <= 0.0) break;
+    float r = k / kp;
+    float a = A * (r >= 1.0 ? pow(r, -gam) : r * r * r * r);
+    if (a > A * 0.003) {
+      // most energy travels with the wind; short waves spread wider
+      float spread = mix(0.5, 1.0, smoothstep(1.0, 4.0, r));
+      float ang = uWave.z + (fract(float(i) * 0.618034) - 0.5) * 2.2 * spread;
+      vec2 d = vec2(cos(ang), sin(ang));
+      float x = dot(d, p) * k - t * sqrt(9.8 * k) + float(i) * 1.7;
+      float e = exp(sharp * (sin(x) - 1.0));
+      h += a * e * fade;
+      g += a * sharp * e * cos(x) * k * d * fade;
+      cr = max(cr, smoothstep(0.88, 1.0, sin(x)) * smoothstep(0.12, 0.7, a / A));
+    }
+    k *= 1.52;
+  }
+  CREST = cr;
+  return vec3(h, g);
+}
+
+// ---------- 3D noise (clouds) ----------
+float hash3(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float noise3(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash3(i),                  hash3(i + vec3(1, 0, 0)), f.x),
+                 mix(hash3(i + vec3(0, 1, 0)), hash3(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), f.x),
+                 mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+// ---------- sky ----------
+const float CLOUD_LO = 900.0, CLOUD_HI = 2300.0;
+const mat3 M3 = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
+
+// northern lights: folded curtains high up, green at the base fading to violet above
+vec3 aurora(vec3 rd) {
+  float amt = uNight.x * (1.0 - DAY) * (1.0 - uWeather.z);
+  if (amt < 0.01 || rd.y <= 0.0) return vec3(0.0);
+  vec3 acc = vec3(0.0);
+  float at = uTime * 0.04;
+  float jit = hash(gl_FragCoord.xy + 3.1);
+  for (int i = 0; i < 20; i++) {
+    float fi = float(i) + jit;
+    // where this ray crosses the curtain at increasing heights
+    vec2 p = rd.xz / (rd.y + 0.05) * 0.35 * (1.0 + fi * 0.07);
+    float b = p.y + sin(p.x * 0.7 + at * 3.0) * 0.8 + (noise(vec2(p.x * 1.3, at)) - 0.5) * 1.6;
+    float rib = exp(-abs(b - 3.0) * 7.0) + 0.6 * exp(-abs(b + 2.0) * 6.0);
+    // bright vertical rays shimmering along the curtain
+    float rays = smoothstep(0.25, 0.85, noise(vec2(p.x * 11.0 + at * 5.0, 0.5))) * 0.75
+               + smoothstep(0.4, 0.9, noise(vec2(p.x * 31.0 - at * 9.0, 2.5))) * 0.45 + 0.1;
+    vec3 c = mix(vec3(0.15, 1.0, 0.45), vec3(0.6, 0.25, 0.95), smoothstep(4.0, 19.0, fi));
+    acc += c * rib * rays * exp(-fi * 0.12);
+  }
+  return acc * amt * 0.12 * smoothstep(0.0, 0.12, rd.y);
+}
+
+// ---------- night sky ----------
+// cube-map coordinates give an even, seamless grid of cells over the whole sky
+vec2 cubeUV(vec3 d, out float face) {
+  vec3 a = abs(d);
+  if (a.x >= a.y && a.x >= a.z) { face = d.x > 0.0 ? 0.0 : 1.0; return d.zy / a.x; }
+  if (a.y >= a.z)               { face = d.y > 0.0 ? 2.0 : 3.0; return d.xz / a.y; }
+  face = d.z > 0.0 ? 4.0 : 5.0;
+  return d.xy / a.z;
+}
+
+// the Milky Way, in celestial coordinates: galactic north pole and centre (Sagittarius)
+const vec3 GAL_N = vec3(-0.86765, -0.19807, 0.45604);
+const vec3 GAL_C = vec3(-0.05495, -0.87338, -0.48393);
+float galaxyBand(vec3 rd, out vec2 gl) {
+  vec3 B = cross(GAL_N, GAL_C);
+  float lat = asin(clamp(dot(rd, GAL_N), -1.0, 1.0));
+  float lon = atan(dot(rd, B), dot(rd, GAL_C));
+  gl = vec2(lon, lat);
+  float core = exp(-lon * lon * 1.2);
+  float width = 0.11 + 0.12 * core;
+  return exp(-lat * lat / (width * width)) * (0.3 + 0.7 * core);
+}
+vec3 milkyWay(float band, vec2 g) {
+  if (band < 0.01) return vec3(0.0);
+  float core = exp(-g.x * g.x * 1.2);
+  float clouds = fbm(vec2(g.x * 7.0, g.y * 16.0) + 3.0);          // star clouds
+  float lum = band * (0.35 + 0.9 * clouds * clouds) * (0.85 + 0.3 * noise(vec2(g.x * 40.0, g.y * 60.0)));
+  // dark dust lanes splitting the band (the Great Rift)
+  float lane = exp(-pow((g.y - 0.025 * sin(g.x * 5.0)) / (0.03 + 0.05 * core), 2.0));
+  float dust = smoothstep(0.35, 0.75, fbm(vec2(g.x * 5.0 + 9.0, g.y * 22.0)));
+  lum *= 1.0 - 0.85 * lane * mix(0.5, 1.0, dust);
+  return mix(vec3(0.70, 0.78, 1.0), vec3(1.0, 0.86, 0.68), core) * lum;
+}
+
+// two layers of stars: a few bright ones of every colour, and countless faint ones
+// crowding into the Milky Way
+vec3 starField(vec3 eq, float up, float band, float deep) {
+  float face;
+  vec2 uv = cubeUV(eq, face);
+  vec3 acc = vec3(0.0);
+  float low = 1.0 - smoothstep(0.0, 0.35, up); // stars near the horizon twinkle harder
+  for (int l = 0; l < 2; l++) {
+    float fl = float(l);
+    float sc = mix(80.0, 240.0, fl);
+    vec2 g = uv * sc;
+    vec2 id = floor(g) + face * 173.0 + fl * 59.0;
+    float h1 = hash(id), h2 = hash(id + 0.37), h3 = hash(id + 1.91), h4 = hash(id + 3.71), h5 = hash(id + 5.3);
+    float dens = l == 0 ? 0.16 : 0.22 + 0.6 * band;
+    if (h1 > dens) continue;
+    vec2 o = 0.25 + 0.5 * vec2(h2, h3);
+    float d = length(fract(g) - o) / sc;
+    float b = l == 0 ? 0.05 + pow(h4, 40.0) * 6.0 + pow(h4, 6.0) * 0.5 : (0.015 + 0.05 * h4) * deep;
+    float tw = 1.0 + (noise(vec2(h1 * 300.0 + uTime * 5.0, fl)) - 0.5) * (0.35 + 0.9 * low);
+    vec3 tint = mix(vec3(1.0, 0.72, 0.5), vec3(1.0, 0.96, 0.9), smoothstep(0.1, 0.4, h5));
+    tint = mix(tint, vec3(0.72, 0.82, 1.0), smoothstep(0.7, 0.95, h5));
+    acc += tint * b * tw * (exp(-d * d / (PX * PX * 0.6)) + exp(-d / (PX * 2.5)) * 0.05 * step(1.0, b));
+  }
+  return acc;
+}
+
+// satellites gliding silently across; one is the bright space station, and now and then
+// a fresh Starlink train goes by as a string of pearls
+vec3 satellites(vec3 rd) {
+  float amt = uStars.w;
+  if (amt < 0.01) return vec3(0.0);
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    float T = 300.0 + fi * 43.0;
+    float tt = uTime + fi * 97.0;
+    float cyc = floor(tt / T);
+    float ph = fract(tt / T);
+    float h1 = hash(vec2(cyc, fi * 3.1)), h2 = hash(vec2(cyc + 0.5, fi * 3.1 + 1.3)), h3 = hash(vec2(cyc + 0.25, fi * 3.1 + 2.7));
+    if (h3 > amt) continue;
+    // a pass from horizon to horizon along a tilted great circle
+    float az = h1 * 6.2832;
+    vec3 A = vec3(sin(az), 0.0, cos(az));
+    float tilt = (h2 - 0.5) * 1.6;
+    vec3 B = normalize(vec3(-A.z * tilt, 1.0, A.x * tilt));
+    float w = ph * 3.1416 * (i == 0 ? 1.7 : 1.0);
+    if (w > 3.1416) continue;
+    vec3 s = A * cos(w) + B * sin(w);
+    float br = i == 0 ? 2.2 : 0.25 + 0.45 * h2;
+    br *= 1.0 - smoothstep(0.0, 0.06, w / 3.1416 - (0.45 + 0.5 * h1)); // slips into Earth's shadow
+    if (i == 5 && h1 < 0.5) {
+      // nearest member of the train trailing behind the leader
+      float wr = atan(dot(rd, B), dot(rd, A));
+      float k = clamp(floor((w - wr) / 0.014 + 0.5), 0.0, 17.0);
+      float wk = w - k * 0.014;
+      s = A * cos(wk) + B * sin(wk);
+      br = 0.55;
+    }
+    float d = length(rd - s);
+    acc += vec3(1.0, 0.98, 0.94) * br * exp(-d * d / (PX * PX * 0.5));
+  }
+  return acc;
+}
+
+// shooting stars: brief streaks that flare and fade, a few burning green
+vec3 meteors(vec3 rd) {
+  float amt = uNight.z;
+  if (amt < 0.01) return vec3(0.0);
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    float fi = float(i);
+    float tt = uTime + fi * 2.9;
+    float slot = floor(tt / 6.0);
+    float h1 = hash(vec2(slot, 31.0 + fi)), h2 = hash(vec2(slot, 47.0 + fi));
+    float h3 = hash(vec2(slot, 59.0 + fi)), h4 = hash(vec2(slot, 71.0 + fi));
+    if (h1 > amt * 0.7) continue;
+    float dur = 0.4 + 0.8 * h2;
+    float age = fract(tt / 6.0) * 6.0 - h3 * (6.0 - dur);
+    if (age < 0.0 || age > dur) continue;
+    float az = h4 * 6.2832, el = 0.3 + 0.8 * fract(h2 * 7.3);
+    vec3 st = vec3(cos(el) * sin(az), sin(el), cos(el) * cos(az));
+    vec3 down = normalize(vec3(0.0, -1.0, 0.0) + st * st.y);
+    vec3 T = normalize(down * 0.6 + cross(st, down) * (fract(h3 * 13.7) - 0.5) * 2.0);
+    float len = 0.15 + 0.2 * h3;
+    float head = len * age / dur;
+    float tail = max(0.0, head - 0.08 - 0.05 * h2);
+    float off = dot(rd, normalize(cross(st, T)));
+    float a = atan(dot(rd, T), dot(rd, st));
+    if (a < tail || a > head) continue;
+    float along = smoothstep(tail, head, a);
+    float g = exp(-off * off / (PX * PX * 0.5)) * along * along * sin(3.1416 * age / dur);
+    acc += mix(vec3(0.85, 0.92, 1.0), vec3(0.6, 1.0, 0.7), step(0.75, h4)) * g * 3.0;
+  }
+  return acc;
+}
+
+vec3 nightSky(vec3 rd) {
+  float dark = (1.0 - smoothstep(-0.12, 0.0, SUN.y)) * (1.0 - uWeather.z);
+  if (dark < 0.01) return vec3(0.0);
+  // the faint stuff needs a truly dark sky, and a bright moon washes it out
+  float deep = (1.0 - smoothstep(-0.3, -0.12, SUN.y)) * (1.0 - 0.7 * uStars.x * step(0.0, MOON.y));
+  vec3 eq = uSkyRot * rd; // the stars and the Milky Way are fixed to the turning celestial sphere
+  vec2 g;
+  float band = galaxyBand(eq, g);
+  vec3 c = (milkyWay(band, g) * deep * 0.15 + starField(eq, rd.y, band, deep)) * uStars.y;
+  c += satellites(rd) + meteors(rd);
+  return c * dark * smoothstep(0.0, 0.2, rd.y);
+}
+
+// the moon as a lit sphere: a real phase, its dark seas, bright rayed Tycho, faint earthshine
+float mare(vec2 p, vec2 c, vec2 r) { return smoothstep(1.0, 0.6, length((p - c) / r)); }
+vec3 moon(vec3 rd, vec3 col) {
+  float vis = (1.0 - DAY) * smoothstep(-0.02, 0.02, MOON.y);
+  if (vis < 0.01) return col;
+  float m = max(dot(rd, MOON), 0.0);
+  col += MOON_COL * (pow(m, 600.0) * 0.5 + pow(m, 40.0) * 0.06); // glow in the air around it
+  const float R = 0.024; // larger than life, as through a long lens
+  if (m < 0.998) return col;
+  vec3 U = normalize(vec3(MOON.z, 0.0, -MOON.x));
+  vec3 V = cross(MOON, U);
+  vec2 p = vec2(dot(rd, U), dot(rd, V)) / R;
+  float r = length(p);
+  float e = PX / R;
+  float a = (1.0 - smoothstep(1.0 - e, 1.0 + e, r)) * vis;
+  if (a <= 0.0) return col;
+  float z = sqrt(max(1.0 - r * r, 0.0));
+  float k = uStars.x;
+  float ph = acos(clamp(2.0 * k - 1.0, -1.0, 1.0)); // phase angle from the lit fraction
+  float sd = dot(SUN, U) >= 0.0 ? 1.0 : -1.0;
+  vec3 L = normalize(vec3(sd * sin(ph), 0.15 * sin(ph), cos(ph)));
+  // with the real sky on, light it from where the sun truly is: the exact phase and tilt
+  if (uMoon.w > 0.5) L = normalize(vec3(dot(uMoonSun, U), dot(uMoonSun, V), -dot(uMoonSun, MOON)));
+  float mu0 = max(dot(vec3(p, z), L), 0.0);
+  float lit = 2.0 * mu0 / (mu0 + z + 0.05);        // Lommel-Seeliger: the moon looks flat, not ball-shaded
+  vec2 q = p + (vec2(fbm(p * 3.0 + 1.3), fbm(p * 3.0 + 7.7)) - 0.5) * 0.12;
+  float maria = mare(q, vec2(-0.25, 0.42), vec2(0.30, 0.25));             // Imbrium
+  maria = max(maria, mare(q, vec2(0.17, 0.40), vec2(0.17, 0.16)));       // Serenitatis
+  maria = max(maria, mare(q, vec2(0.33, 0.14), vec2(0.22, 0.18)));       // Tranquillitatis
+  maria = max(maria, mare(q, vec2(-0.58, 0.05), vec2(0.28, 0.48)));      // Procellarum
+  maria = max(maria, mare(q, vec2(0.66, 0.30), vec2(0.11, 0.09)));       // Crisium
+  maria = max(maria, mare(q, vec2(0.52, -0.14), vec2(0.13, 0.15)));      // Fecunditatis
+  maria = max(maria, mare(q, vec2(0.34, -0.27), vec2(0.09, 0.09)));      // Nectaris
+  maria = max(maria, mare(q, vec2(-0.17, -0.33), vec2(0.18, 0.13)));     // Nubium
+  maria = max(maria, mare(q, vec2(-0.05, 0.72), vec2(0.40, 0.07)));      // Frigoris
+  float alb = mix(1.0, 0.48, maria) * (0.82 + 0.36 * fbm(p * 11.0 + 4.0));
+  vec2 ty = p - vec2(-0.12, -0.63);
+  vec2 cp = p - vec2(-0.3, 0.12);
+  alb += pow(noise(vec2(atan(ty.y, ty.x) * 5.0, 1.0)), 4.0) * exp(-length(ty) * 2.2) * 0.5   // Tycho's rays
+       + exp(-dot(ty, ty) * 800.0) * 0.6 + exp(-dot(cp, cp) * 1500.0) * 0.4;           // Tycho, Copernicus
+  vec3 c = vec3(1.0, 0.97, 0.92) * alb * lit * 1.7 + vec3(0.025, 0.035, 0.05) * alb * (1.0 - k);
+  return mix(col, c, a);
+}
+
+// airliners at cruise altitude: contrails by day, nav lights and strobes by night
+vec3 airTraffic(vec3 rd, vec3 col) {
+  float amt = uStars.z;
+  if (amt < 0.01 || rd.y < 0.002) return col;
+  const float L = 90000.0, V = 240.0;
+  const float T = 2.0 * L / V; // seconds per crossing
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    float tt = uTime + fi * T * 0.27 + 37.0 * fi;
+    float cyc = floor(tt / T);
+    float s = fract(tt / T) * 2.0 * L - L;   // along-track position
+    float h1 = hash(vec2(cyc, fi + 0.5)), h2 = hash(vec2(cyc, fi + 7.1)), h3 = hash(vec2(cyc, fi + 3.3));
+    if (h1 > 0.15 + 0.85 * amt) continue;
+    float hd = h2 * 6.2832;
+    vec2 dir = vec2(cos(hd), sin(hd));
+    vec2 nrm = vec2(-dir.y, dir.x);
+    float alt = 9000.0 + 3000.0 * fract(h1 * 13.1);
+    vec2 P = RO.xz + nrm * (h3 - 0.5) * 70000.0 + dir * s;
+    // contrail where this ray crosses the cruise altitude: widens, drifts and fades behind
+    if (DAY > 0.05) {
+      float tH = (alt - RO.y) / rd.y;
+      vec2 d = RO.xz + rd.xz * tH - P;
+      float behind = -dot(d, dir);
+      if (behind > 0.0 && behind < 30000.0) {
+        float lat = dot(d, nrm) + (noise(vec2(behind * 0.0008, fi * 5.0 + cyc)) - 0.5) * behind * 0.03;
+        float w = 15.0 + behind * 0.012;
+        float ww = max(w, PX * tH);
+        float persist = mix(5000.0, 16000.0, fract(h2 * 31.0));
+        float ca = exp(-lat * lat / (ww * ww)) * (w / ww) * smoothstep(80.0, 500.0, behind) * exp(-behind / persist);
+        col = mix(col, vec3(0.95) * (SKY_AMB * 0.85 + SUN_COL * 0.6), ca * 0.8 * DAY * amt);
+      }
+    }
+    // the aircraft itself
+    vec3 toP = vec3(P.x, alt, P.y) - RO;
+    float D = length(toP);
+    vec3 pd = toP / D;
+    float sz = max(PX, 35.0 / D);
+    float dd = length(rd - pd);
+    float g = exp(-dd * dd / (sz * sz * 0.8)) * smoothstep(0.0, 0.03, pd.y) * exp(-D / 150000.0);
+    if (g > 0.001) {
+      col = mix(col, SKY_AMB * 0.3 + SUN_COL * 0.25, g * 0.75 * DAY);      // a tiny silhouette by day
+      float tb = uTime + fi * 0.37;
+      float beacon = step(fract(tb * 0.9), 0.07);                           // red anti-collision beacon
+      float fs = fract(tb * 0.8 + 0.5);
+      float strobe = step(fs, 0.03) + step(abs(fs - 0.1), 0.015);           // white double strobe
+      float lg = exp(-dd * dd / (PX * PX * 0.6));
+      col += (vec3(1.0, 0.95, 0.85) * 0.35 + vec3(1.0, 0.1, 0.05) * beacon * 2.5 + vec3(1.0) * strobe * 5.0)
+           * lg * (1.0 - DAY) * smoothstep(0.0, 0.03, pd.y) * exp(-D / 150000.0);
+    }
+  }
+  return col;
+}
+
+vec3 skyBase(vec3 rd, bool withSun) {
+  float y = max(rd.y, 0.0);
+  float s = max(dot(rd, SUN), 0.0);
+  float low = 1.0 - smoothstep(0.0, 0.35, SUN.y); // golden-hour amount
+  vec3 zen = mix(vec3(0.04, 0.24, 0.72), vec3(0.10, 0.18, 0.42), low * 0.6);
+  vec3 warm = mix(vec3(0.95, 0.62, 0.45), vec3(1.0, 0.45, 0.15), pow(s, 2.0));
+  vec3 hor = mix(vec3(0.52, 0.76, 0.98), warm, low * (0.25 + 0.75 * pow(s, 1.5)));
+  vec3 col = mix(hor, zen, pow(y, 0.5));
+  // overcast skies lose their colour
+  col = mix(col, vec3(dot(col, vec3(0.3, 0.59, 0.11))) * vec3(0.92, 0.96, 1.03), uWeather.z * 0.85);
+  col *= SKY_AMB;
+  col += SUN_COL * (pow(s, 6.0) * 0.18 + pow(s, 80.0) * 0.45);
+  if (rd.y > 0.0) {
+    // stars, milky way, satellites, meteors (direct view only, not in reflections)
+    if (withSun) col += nightSky(rd);
+    // faint high-altitude cirrus streaks
+    vec2 cp = rd.xz / (rd.y + 0.06) * 0.9 + vec2(uSky.y * 0.01, uSky.y * 0.002);
+    cp = mat2(0.8, 0.6, -0.6, 0.8) * cp;
+    float c = smoothstep(0.55, 0.95, fbm(cp * vec2(0.5, 3.0)));
+    vec3 cirrus = vec3(1.0, 0.98, 0.96) * SKY_AMB * 1.05 + SUN_COL * pow(s, 4.0) * 0.4;
+    col = mix(col, cirrus, c * 0.35 * smoothstep(0.0, 0.15, rd.y));
+    col += aurora(rd);
+  }
+  if (withSun) {
+    col += SUN_COL * smoothstep(0.9994, 0.9998, s) * 12.0;
+    col = moon(rd, col);
+    if (rd.y > 0.0) col = airTraffic(rd, col);
+  }
+  return col;
+}
+
+// density of the cumulus layer at world point p (0..1)
+float DETAIL = 1.0; // fine edge detail, faded out with distance where it would only shimmer
+float cloudDensity(vec3 p, int oct) {
+  float h = (p.y - CLOUD_LO) / (CLOUD_HI - CLOUD_LO);
+  if (h < 0.0 || h > 1.0) return 0.0;
+  float ct = uSky.y;
+  // wind drift, with tops leaning downwind
+  vec3 wind = vec3(16.0, 0.0, 6.0) * ct + vec3(h * 350.0, 0.0, 0.0);
+  vec3 q = (p + wind) * 0.0008;
+  q.y -= ct * 0.0035; // shapes slowly billow upward and morph
+  // coverage drifts too: clouds form and dissolve over the minutes
+  float cov = noise(q.xz * 0.3 + vec2(ct * 0.003, -ct * 0.002));
+  // threshold rises with height (rounded tops) and varies over large areas (clear gaps)
+  float thr = 0.60 + 0.20 * h + (cov - 0.5) * 0.3 + (0.5 - uSky.x) * 0.45;
+  float v = 0.0, a = 0.5;
+  vec3 qb = q;
+  for (int i = 0; i < 4; i++) {
+    if (i >= oct) break;
+    v += a * noise3(qb);
+    if (i == 1 && v + 0.28 < thr) return 0.0; // can't reach threshold: skip detail
+    qb = M3 * qb * 2.03;
+    a *= 0.5;
+  }
+  v += a; // mean of skipped octaves
+  float d = v - thr;
+  if (oct > 4 && d > -0.04 && DETAIL > 0.01) {
+    // fine cauliflower billows on the edges, churning faster than the cloud body
+    vec3 qd = q * 8.0 + vec3(0.0, -ct * 0.04, ct * 0.015);
+    float b = abs(noise3(qd) * 2.0 - 1.0) * 0.6
+            + abs(noise3(M3 * qd * 2.1) * 2.0 - 1.0) * 0.4;
+    d -= (b * 0.09 * (1.0 - smoothstep(0.0, 0.14, d)) - 0.03) * DETAIL;
+  }
+  d *= 10.0 * smoothstep(0.0, 0.08, h); // flat cloud bases
+  return clamp(d, 0.0, 1.0);
+}
+
+float hg(float mu, float g) {
+  float g2 = g * g;
+  return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5);
+}
+
+// volumetric clouds along a ray: (light scattered toward the eye, transmittance)
+vec4 cloudMarch(vec3 ro, vec3 rd, float jitter) {
+  if (rd.y < 0.01) return vec4(0.0, 0.0, 0.0, 1.0);
+  float t0 = (CLOUD_LO - ro.y) / rd.y;
+  float t1 = min((CLOUD_HI - ro.y) / rd.y, t0 + 7000.0);
+  if (t0 > 45000.0) return vec4(0.0, 0.0, 0.0, 1.0);
+
+  const int N = 56;
+  float dt = (t1 - t0) / float(N);
+  float t = t0 + dt * jitter;
+  float mu = dot(rd, SUN);
+  float phase = 0.7 * hg(mu, 0.55) + 0.3 * hg(mu, -0.2);
+  float ext = 1.0 + uWeather.z * 1.5; // storm clouds are thicker and darker
+  float T = 1.0;
+  vec3 acc = vec3(0.0);
+
+  for (int i = 0; i < N; i++) {
+    if (T < 0.02) break;
+    vec3 p = ro + rd * t;
+    DETAIL = 1.0 - smoothstep(6000.0, 18000.0, t);
+    float d = cloudDensity(p, 5);
+    if (d > 0.0) {
+      float ld = cloudDensity(p + SUN * 70.0, 3)
+               + cloudDensity(p + SUN * 200.0, 3)
+               + cloudDensity(p + SUN * 450.0, 2) * 1.3;
+      float beer = exp(-ld * 1.8 * ext);
+      // multiple scattering keeps cloud interiors luminous instead of flat grey
+      float ms = exp(-ld * 0.55 * ext) * 0.3 + exp(-ld * 0.18 * ext) * 0.12;
+      float powder = 1.0 - exp(-d * 6.0) * 0.5;
+      float h = clamp((p.y - CLOUD_LO) / (CLOUD_HI - CLOUD_LO), 0.0, 1.0);
+      vec3 amb = mix(vec3(0.30, 0.37, 0.46), vec3(0.76, 0.86, 1.0), pow(h, 0.7)) * SKY_AMB;
+      vec3 c = SUN_COL * 3.0 * (beer * phase + ms) * powder + amb;
+      // lightning lights the cloud deck from inside, brightest near the strike
+      c += vec3(0.75, 0.8, 1.0) * uWeather.w * 4.0 * exp(-length(p.xz - uBolt.xy) / 2000.0);
+      float a = 1.0 - exp(-d * 0.04 * ext * dt);
+      acc += T * a * c;
+      T *= 1.0 - a;
+    }
+    t += dt;
+  }
+  DETAIL = 1.0;
+  // aerial perspective: distant clouds melt into the sky
+  float fade = exp(-t0 * 0.000055);
+  return vec4(acc * fade, mix(1.0, T, fade));
+}
+
+// cheap single-sample cloud layer for reflections
+vec3 skyReflect(vec3 ro, vec3 rd) {
+  vec3 bg = skyBase(rd, false); // sun glint is added separately as specular
+  if (rd.y < 0.01) return bg;
+  float t = (CLOUD_LO + 350.0 - ro.y) / rd.y;
+  float d = cloudDensity(ro + rd * t, 2);
+  float op = smoothstep(0.0, 0.8, d) * 0.6 * exp(-t * 0.000055);
+  return mix(bg, vec3(0.80, 0.84, 0.90) * SKY_AMB + SUN_COL * 0.2, op);
+}
+
+// fraction of sunlight blocked by clouds above a point
+float cloudShadow(vec3 p) {
+  if (SUN.y < 0.02) return 0.0;
+  float t = (CLOUD_LO + 350.0 - p.y) / SUN.y;
+  return clamp(cloudDensity(p + SUN * t, 3) * 2.5, 0.0, 1.0);
+}
+
+// ---------- weather ----------
+// jagged lightning channel from the cloud base down to the sea
+vec3 lightningBolt(vec3 ro, vec3 rd) {
+  if (uWeather.w < 0.01 || uBolt.z < 0.5) return vec3(0.0);
+  vec2 rh = rd.xz;
+  float rr = dot(rh, rh);
+  vec2 v = uBolt.xy - ro.xz;
+  float t = dot(v, rh) / rr;   // where the ray passes the bolt
+  if (t <= 0.0) return vec3(0.0);
+  float y = ro.y + rd.y * t;
+  if (y < 0.0 || y > CLOUD_LO) return vec3(0.0);
+  float sd = uBolt.w;
+  vec2 vj = v + (vec2(fbm(vec2(y * 0.006, sd)), fbm(vec2(y * 0.006, sd + 17.0))) - 0.5) * 700.0;
+  float dm = length(vj - rh * dot(vj, rh) / rr);
+  float glow = exp(-dm / 8.0) * 10.0 + exp(-dm / 90.0) * 0.6;
+  // one side branch forking off partway down
+  float yb = CLOUD_LO * (0.45 + 0.3 * fract(sd * 0.37));
+  if (y < yb && y > yb - 380.0) {
+    vec2 dir = normalize(vec2(fract(sd * 0.71), fract(sd * 0.53)) - 0.5 + 0.01);
+    vec2 vb = vj + dir * (yb - y) * 0.7
+            + (vec2(fbm(vec2(y * 0.02, sd + 5.0)), fbm(vec2(y * 0.02, sd + 9.0))) - 0.5) * 120.0;
+    float db = length(vb - rh * dot(vb, rh) / rr);
+    glow += (exp(-db / 4.0) * 4.0 + exp(-db / 60.0) * 0.2) * smoothstep(yb - 380.0, yb - 200.0, y);
+  }
+  return vec3(0.8, 0.86, 1.0) * glow * uWeather.w;
+}
+
+// fraction of light lost to fog / rain haze / spray along a ray (height fog)
+float fogAmount(vec3 ro, vec3 rd, float t) {
+  float rho = uWeather.y;
+  if (rho <= 0.0) return 0.0;
+  const float H = 70.0;
+  float base = rho * exp(-ro.y / H);
+  float k = rd.y / H;
+  float tau = abs(k) < 1e-5 ? base * t : base * (1.0 - exp(-k * t)) / k;
+  return 1.0 - exp(-tau);
+}
+vec3 fogColor(vec3 rd) {
+  float s = max(dot(rd, SUN), 0.0);
+  vec3 base = mix(vec3(0.62, 0.67, 0.73), vec3(0.82, 0.85, 0.89), uPrecip.x); // snow whitens it
+  base = mix(base, vec3(0.80, 0.54, 0.30), uPrecip.z);                         // dust turns it ochre
+  return base * SKY_AMB + SUN_COL * (0.15 + pow(s, 8.0) * 0.7);
+}
+
+// one layer of drifting snowflakes; a = (azimuth, elevation) in radians
+float snowLayer(vec2 a, float scale, float speed, float dens, float seed, float px) {
+  vec2 p = a * scale;
+  float cx = floor(p.x);
+  float ph = hash(vec2(cx, seed));
+  p.y += uTime * speed * (0.75 + 0.5 * ph) + ph * 17.0;   // columns fall at their own pace
+  vec2 c = vec2(cx, floor(p.y));
+  vec3 h = vec3(hash(c + seed * 3.1), hash(c + seed * 3.1 + 1.7), hash(c + seed * 3.1 + 4.3));
+  if (h.x > dens) return 0.0;
+  // flakes flutter side to side as they fall
+  vec2 o = vec2(0.32 + 0.36 * h.y + 0.15 * sin(uTime * (1.3 + h.z) + h.y * 6.28), 0.3 + 0.4 * h.z);
+  float d = length(fract(p) - o);
+  float rad = 0.05 + 0.07 * h.z;
+  float w = px * scale;                                    // one pixel in cell units
+  return (1.0 - smoothstep(rad * 0.3, rad + w, d)) * min(1.0, (rad + w * 0.5) / (w * 1.5));
+}
+
+// rainbow opposite the sun: primary at ~42°, fainter reversed secondary at ~51°
+vec3 bowBand(float x) {
+  float w = smoothstep(0.0, 0.2, x) * smoothstep(1.0, 0.75, x);
+  float h = (1.0 - clamp(x, 0.0, 1.0)) * 0.75;            // red outside .. violet inside
+  return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0) * w;
+}
+vec3 rainbow(vec3 rd, out float dark) {
+  float th = degrees(acos(clamp(dot(rd, -SUN), -1.0, 1.0)));
+  dark = smoothstep(42.0, 43.5, th) * smoothstep(51.0, 49.5, th); // Alexander's dark band
+  return bowBand((th - 40.2) / 2.2) + bowBand((53.6 - th) / 3.2) * 0.4
+       + vec3(0.05) * smoothstep(41.0, 38.0, th);            // brighter sky inside the bow
+}
+
+// waterspout: a rotating funnel of condensation hanging from the cloud base to the sea.
+// Returns colour + opacity; tS = distance along the ray.
+vec4 waterspout(vec3 ro, vec3 rd, out float tS) {
+  tS = 1e5;
+  float st = uSpout.z;
+  if (st < 0.01) return vec4(0.0);
+  vec2 rh = rd.xz;
+  float rr = dot(rh, rh);
+  vec2 v = uSpout.xy - ro.xz;
+  float t = dot(v, rh) / rr;
+  if (t <= 0.0) return vec4(0.0);
+  vec2 axis = v;
+  for (int i = 0; i < 2; i++) {
+    float hy = clamp((ro.y + rd.y * t) / CLOUD_LO, 0.0, 1.0);
+    // the funnel snakes about and its top trails downwind
+    axis = v + (vec2(noise(vec2(hy * 2.7, uTime * 0.07)), noise(vec2(hy * 2.7 + 7.0, uTime * 0.07))) - 0.5) * 160.0 * hy
+             + vec2(cos(uWave.z), sin(uWave.z)) * hy * hy * 300.0;
+    t = dot(axis, rh) / rr;
+  }
+  float y = ro.y + rd.y * t;
+  if (y < -2.0 || y > CLOUD_LO + 520.0) return vec4(0.0);
+  float hn = clamp(y / CLOUD_LO, 0.0, 1.0);
+  vec2 perp = axis - rh * t;
+  float dm = length(perp);
+  vec2 rhN = rh / sqrt(rr);
+  vec2 rgt = vec2(rhN.y, -rhN.x);
+
+  // funnel: a thin rope at the sea flaring into the cloud, lowering as it forms
+  float bottom = CLOUD_LO * (1.0 - st);
+  float R = (12.0 + 25.0 * hn + 330.0 * pow(hn, 5.0)) * smoothstep(bottom - 20.0, bottom + 150.0, y);
+  R *= 0.85 + 0.3 * noise(vec2(y * 0.015, uTime * 0.4));   // ragged, pulsing edges
+  vec3 fc = vec3(0.0);
+  float fa = 0.0;
+  if (dm < R) {
+    float sp = clamp(-dot(perp, rgt) / R, -1.0, 1.0);    // where across the funnel we look
+    float cp = sqrt(1.0 - sp * sp);
+    float lam = max(dot(rgt * sp - rhN * cp, SUN.xz), 0.0);
+    // faint spiral striations winding round as it spins
+    float sw = noise(vec2(asin(sp) * 2.0 + uTime * 2.5 + y * 0.006, y * 0.004));
+    fc = vec3(0.6, 0.63, 0.68) * SKY_AMB * (0.8 + 0.25 * sw) * (0.75 + 0.25 * cp) + SUN_COL * lam * 0.35;
+    fa = (1.0 - exp(-cp * 3.0)) * (0.8 + 0.25 * sw) * smoothstep(CLOUD_LO + 40.0, CLOUD_LO - 150.0, y);
+  }
+  // dark, lowered parent cloud the funnel hangs from
+  float wall = 0.0;
+  vec3 wc = vec3(0.0);
+  if (st > 0.05 && y > CLOUD_LO - 320.0 && dm < 1100.0) {
+    float n = noise(perp * 0.004 + vec2(0.0, y * 0.004)) * 0.6 + noise(perp * 0.012 + y * 0.01 + uTime * 0.05) * 0.4;
+    vec2 e = vec2(dm / 1000.0, (y - CLOUD_LO - 80.0) / 420.0);
+    float blob = smoothstep(1.0, 0.55, length(e) + (n - 0.5) * 0.5);
+    float base = CLOUD_LO - 250.0 * st * (1.0 - smoothstep(100.0, 900.0, dm)) + (n - 0.5) * 120.0;
+    wall = blob * smoothstep(base, base + 80.0, y) * smoothstep(0.05, 0.4, st);
+    wc = mix(vec3(0.36, 0.39, 0.44), vec3(0.62, 0.65, 0.7), smoothstep(CLOUD_LO - 200.0, CLOUD_LO + 400.0, y))
+       * SKY_AMB * (0.85 + 0.3 * n);
+  }
+  // spray vortex kicked up where it touches the water
+  float touch = smoothstep(0.85, 1.0, st);
+  vec3 sc = vec3(0.0);
+  float sa = 0.0;
+  if (touch > 0.0 && y < 200.0) {
+    float Rs = 45.0 + y * 1.3;
+    float xs = dm / Rs;
+    float sn = noise(vec2(-dot(perp, rgt) / Rs * 3.0 + uTime * 1.5, y * 0.06 - uTime * 0.6));
+    sa = exp(-xs * xs * 2.5) * exp(-y / 50.0) * touch * (0.4 + 0.7 * sn);
+    sc = vec3(0.82, 0.85, 0.88) * SKY_AMB + SUN_COL * 0.3;
+  }
+  fa = max(fa, 0.0);
+  vec3 c = fc * fa + sc * sa * (1.0 - fa);
+  float a = 1.0 - (1.0 - fa) * (1.0 - sa);
+  c = c * (1.0 - wall) + wc * wall;
+  a = 1.0 - (1.0 - a) * (1.0 - wall);
+  if (a < 0.001) return vec4(0.0);
+  tS = t;
+  return vec4(c / a, clamp(a, 0.0, 1.0));
+}
+
+// gusts of blown dust, spindrift and spray streaming past, sampled at a few depths
+float veils(vec3 ro, vec3 rd, float tMax) {
+  vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+  float acc = 0.0, t = 6.0;
+  for (int i = 0; i < 4; i++) {
+    if (t > tMax) break;
+    vec3 p = ro + rd * t;
+    vec2 q = p.xz - uWind.xy;                                  // carried along by the wind
+    vec2 s = vec2(dot(q, wd), dot(q, vec2(-wd.y, wd.x)));      // along / across the wind
+    float n = fbm(vec2(s.x * 0.05, s.y * 0.2 + p.y * 0.3) + float(i) * 7.3);
+    acc += (1.0 - acc) * smoothstep(0.5, 0.85, n) * exp(-max(p.y, 0.0) / 30.0) * 0.6;
+    t *= 2.5;
+  }
+  return acc;
+}
+
+// one layer of falling rain streaks; a = (azimuth, elevation) in radians
+float rainLayer(vec2 a, float cols, float len, float speed, float dens, float seed, float px, float amount) {
+  float x = a.x * cols;
+  float c = floor(x);
+  float r1 = hash(vec2(c, seed));
+  float r2 = hash(vec2(c, seed + 3.7));
+  if (r2 > dens * (0.3 + 0.7 * amount)) return 0.0;
+  float fx = fract(x) - 0.2 - 0.6 * r1;            // streak position inside its column
+  float y = (a.y + uTime * speed) / len + r1 * 37.0;
+  float fy = mod(y, 3.0 + r2 * 8.0);               // one drop, then a gap
+  float s = smoothstep(0.0, 0.25, fy) * smoothstep(1.0, 0.35, fy);
+  float w = max(0.05, px * cols);                  // at least ~1 pixel wide
+  return s * (1.0 - smoothstep(0.5 * w, 1.5 * w, abs(fx))) * min(1.0, 0.07 / w);
+}
+
+// expanding rings where raindrops hit the water: (normal perturbation, splash)
+vec3 rainRipples(vec2 p, float t) {
+  vec2 g = vec2(0.0);
+  float spl = 0.0;
+  for (int l = 0; l < 3; l++) {
+    float fl = float(l);
+    vec2 q = p * 1.7 + fl * vec2(0.37, 0.61);
+    vec2 c = floor(q);
+    vec2 h = vec2(hash(c + fl * 11.3), hash(c + fl * 5.7 + 2.1));
+    vec2 dv = fract(q) - (0.35 + 0.3 * h);
+    float d = length(dv);
+    float age = fract(t * 1.1 + h.x * 5.0 + fl * 0.33);
+    float s = (d - age * 0.26) * 30.0;
+    g += dv / max(d, 1e-3) * (1.0 - age) * (1.0 - age) * exp(-s * s) * sin(s * 2.0);
+    spl += exp(-d * d * 900.0) * smoothstep(0.12, 0.0, age);
+  }
+  return vec3(g, spl);
+}
+
+// ---------- sea floor ----------
+float floorDepth(vec2 p) {
+  float n = fbm(p * 0.03 + 7.0);
+  float d = mix(1.0, 9.0, smoothstep(0.40, 0.66, n));   // shallow sand flats vs deep channels
+  d += (fbm(p * 0.45) - 0.5) * 0.5;                       // dunes
+  d += 0.04 * sin(p.x * 2.6 + sin(p.y * 1.1) * 2.5);      // sand ripples
+  return d * uWater.z;
+}
+
+float causticLayer(vec2 uv, float t) {
+  vec2 p = mod(uv * 6.2832, 6.2832) - 250.0;
+  vec2 i = p;
+  float c = 1.0, inten = 0.005;
+  for (int n = 0; n < 5; n++) {
+    float tt = t * (1.0 - (3.5 / float(n + 1)));
+    i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+    c += 1.0 / length(vec2(p.x / (sin(i.x + tt) / inten), p.y / (cos(i.y + tt) / inten)));
+  }
+  c /= 5.0;
+  c = 1.17 - pow(c, 1.4);
+  return pow(abs(c), 8.0);
+}
+
+vec3 seaFloor(vec2 p, float depth, float dist) {
+  float grain = fbm(p * 2.2);
+  vec3 sand = vec3(0.96, 0.88, 0.70) * (0.82 + 0.3 * grain);
+  // scattered darker patches (rocks / seagrass)
+  float patchN = fbm(p * 0.25 + 31.0);
+  sand = mix(sand, vec3(0.32, 0.40, 0.28) * (0.7 + 0.5 * grain), smoothstep(0.66, 0.74, patchN) * 0.8);
+  float t = uTime * 0.55 + 23.0;
+  float c = causticLayer(p * 0.45, t) * 0.6 + causticLayer(p * 0.31 + 0.37, t * 0.8) * 0.4;
+  c *= exp(-depth * 0.12) * (1.0 - smoothstep(25.0, 70.0, dist)) * smoothstep(0.0, 0.3, SUN.y);
+  return sand * (0.62 + 1.7 * c);
+}
+
+// ---------- under the sea ----------
+// a school of small silvery fish milling around in loose rings, keeping company with the
+// diver: it slowly circles around you at a curious distance. Fish are lit, countershaded
+// slivers pointing the way they swim, with a beating tail and a silver flash as they turn.
+vec3 fishSchool(vec3 ro, vec3 rd, float t, float maxT, vec3 col, vec3 waterCol, vec3 light, vec3 ext) {
+  float hs = 0.37;
+  float ca = t * 0.04;
+  vec3 C = ro + vec3(cos(ca), 0.0, sin(ca)) * (9.0 + 3.0 * sin(t * 0.11));
+  C.y = min(ro.y + sin(t * 0.13) * 1.2, -1.6);
+  for (int i = 0; i < 28; i++) {
+    float fi = float(i);
+    float h1 = hash(vec2(fi, hs * 31.0)), h2 = hash(vec2(fi + 7.7, hs * 17.0)), h3 = hash(vec2(fi + 3.3, hs * 5.0));
+    float R = 2.5 + 4.0 * h1;
+    float w = (0.35 + 0.2 * h2) / R * 2.2;                  // all circle the same way, inner ones faster
+    float a = t * w + fi * 2.39;
+    vec3 P = C + vec3(cos(a) * R, (h3 - 0.5) * 2.5 + sin(t * 0.7 + fi) * 0.3, sin(a) * R);
+    vec3 dirF = normalize(vec3(-sin(a), 0.08 * cos(t * 0.7 + fi), cos(a)));
+    vec3 v = P - ro;
+    float D = length(v);
+    if (D > maxT || D < 0.3) continue;
+    vec3 dv = v / D;
+    if (dot(rd, dv) < 0.985) continue;
+    vec3 rgt = normalize(cross(vec3(0.0, 1.0, 0.0), dv));
+    vec3 up = cross(dv, rgt);
+    float L = 0.16 + 0.08 * h2;                               // half body length in metres
+    vec2 q = vec2(dot(rd, rgt), dot(rd, up)) * D;             // offset at the fish, in metres
+    vec2 ax = vec2(dot(dirF, rgt), dot(dirF, up));
+    float al = length(ax);
+    ax = al > 1e-3 ? ax / al : vec2(1.0, 0.0);
+    vec2 lq = vec2(dot(q, ax), dot(q, vec2(-ax.y, ax.x)));    // along / across the fish
+    float lenA = L * max(al, 0.25);                           // head-on fish look short
+    float tail = sin(t * 14.0 + fi * 3.0) * 0.25 * L;
+    float bx = lq.x / lenA;
+    // slim body, deepest just behind the head and tapering to the tail
+    float body = length(vec2(bx, lq.y / (L * 0.2 * (1.0 - 0.45 * max(-bx, 0.0)) * (1.0 - 0.25 * max(bx, 0.0))))) - 1.0;
+    float tailT = lq.x < -0.8 * lenA ? abs(lq.y - tail * (-lq.x / lenA - 0.8)) - (-lq.x / lenA - 0.8) * L * 0.55 : 1.0;
+    tailT = max(tailT, -1.25 * lenA - lq.x);
+    float sdf = min(body * L * 0.25, tailT);
+    float cov = clamp(0.5 - sdf / (PX * D), 0.0, 1.0);
+    if (cov <= 0.0) continue;
+    float flash = pow(max(dot(reflect(rd, normalize(vec3(-dirF.z, 0.3, dirF.x))), SUN), 0.0), 12.0);
+    vec3 fc = mix(vec3(0.25, 0.32, 0.38), vec3(0.75, 0.8, 0.82), smoothstep(-0.5, 0.5, lq.y / (L * 0.28) * sign(ax.x + 1e-3)));
+    fc = fc * (light * 0.55 + waterCol * 0.8) + light * flash * 1.5;
+    vec3 T = exp(-ext * D);
+    col = mix(col, fc * T + waterCol * (1.0 - T), cov);
+  }
+  return col;
+}
+// Looking up: the wavy surface from below, with the sky squeezed into a bright circle
+// (Snell's window) and mirror-like total reflection outside it. Looking down: the sandy
+// floor with its caustics. In between: blue-green water, shafts of light, drifting specks.
+vec3 underwaterView(vec3 ro, vec3 rd, float t) {
+  float murk = uWater.y;
+  vec3 absorb = vec3(0.36, 0.068, 0.045) * murk;
+  vec3 light = SUN_COL * 0.85 * smoothstep(-0.02, 0.4, SUN.y) + SKY_AMB * 0.2 + MOON_COL * 0.5;
+  float camDepth = -ro.y;
+  vec3 deep = mix(vec3(0.02, 0.26, 0.34), vec3(0.06, 0.24, 0.2), smoothstep(1.0, 3.0, murk) * 0.7);
+  // the water glows toward the light above and darkens with depth
+  vec3 waterCol = deep * (SKY_AMB * 0.45 + light * 0.55) * (0.25 + 1.3 * pow(rd.y * 0.5 + 0.5, 2.0))
+                * exp(-absorb * camDepth * 0.5);
+  vec3 ext = absorb * 0.6 + 0.06 * murk; // absorption plus the haze of suspended particles
+  vec3 col;
+  float dist;
+  if (rd.y > 0.0) {
+    float ts = camDepth / rd.y;
+    vec3 w;
+    for (int i = 0; i < 3; i++) {
+      vec3 p = ro + rd * ts;
+      w = waves(p.xz, t, ts);
+      ts = max((w.x - ro.y) / rd.y, 0.0);
+    }
+    dist = ts;
+    vec3 p = ro + rd * ts;
+    w = waves(p.xz, t, ts);
+    vec3 n = normalize(vec3(-w.y, 1.0, -w.z));
+    vec3 tr = refract(rd, -n, 1.333);
+    vec3 mirror = waterCol * 1.3;                         // the lit water below, reflected
+    if (dot(tr, tr) < 1e-4) {
+      col = mirror;                                       // total internal reflection
+    } else {
+      // reflection rises smoothly toward the window's edge, giving it a bright soft rim
+      float F = 0.02 + 0.98 * pow(1.0 - max(dot(tr, n), 0.0), 5.0);
+      vec3 sky = skyBase(tr, false) + SUN_COL * pow(max(dot(tr, SUN), 0.0), 200.0) * 25.0
+               + MOON_COL * pow(max(dot(tr, MOON), 0.0), 300.0) * 20.0;
+      col = mix(sky, mirror, F);
+    }
+  } else {
+    // where the sea is shallower than the diver, the bottom drops away so there is always
+    // room to swim: never end up inside the sand
+    float shift = max(0.0, camDepth + 2.5 - floorDepth(ro.xz));
+    // march the ray down to the sandy bottom in growing steps, then home in on the crossing
+    float t0 = 0.0, t1 = 0.0, d = 0.0;
+    float stp = 0.4;
+    bool hit = false;
+    for (int i = 0; i < 28; i++) {
+      t1 = t0 + stp;
+      vec3 q = ro + rd * t1;
+      if (q.y < -floorDepth(q.xz) - shift) { hit = true; break; }
+      t0 = t1;
+      stp *= 1.15;
+    }
+    float tf = t1;
+    if (hit) {
+      for (int i = 0; i < 5; i++) {
+        float tm = 0.5 * (t0 + t1);
+        vec3 q = ro + rd * tm;
+        if (q.y < -floorDepth(q.xz) - shift) t1 = tm; else t0 = tm;
+      }
+      tf = t1;
+    }
+    d = floorDepth((ro + rd * tf).xz) + shift;
+    dist = tf;
+    vec3 q = ro + rd * tf;
+    vec3 sand = mix(seaFloor(q.xz, d, tf), vec3(0.85, 0.8, 0.66) * (0.8 + 0.4 * fbm(q.xz * 1.5)), 0.45);
+    col = sand * light * exp(-absorb * d * 0.8);
+  }
+  vec3 T = exp(-ext * dist);
+  col = col * T + waterCol * (1.0 - T);
+
+  // god rays: flickering shafts where the waves focus sunlight, fading with distance
+  float shafts = 0.0;
+  float jit = hash(gl_FragCoord.xy + fract(t));
+  for (int i = 0; i < 10; i++) {
+    float s = (float(i) + jit) * 2.4;
+    if (s > dist) break;
+    vec3 q = ro + rd * s;
+    if (q.y > 0.0) break;
+    vec2 sp = q.xz + SUN.xz / max(SUN.y, 0.25) * q.y;   // trace up the sunbeam to the surface
+    shafts += causticLayer(sp * 0.06, t * 0.35) * exp(-s * 0.09);
+  }
+  col += light * vec3(0.35, 0.75, 0.8) * shafts * 0.07 * smoothstep(0.0, 0.3, SUN.y);
+
+  col = fishSchool(ro, rd, t, dist, col, waterCol, light, ext);
+
+  // marine snow: tiny specks drifting in the water
+  float elv = asin(clamp(rd.y, -1.0, 1.0));
+  vec2 a = vec2(atan(rd.x, rd.z), elv);
+  float sn = snowLayer(a, 40.0, 0.06, 0.05, 21.0, PX) + snowLayer(a, 90.0, 0.04, 0.07, 22.0, PX) * 0.5;
+  col += (light * 0.2 + waterCol) * sn * 0.35;
+  return col;
+}
+
+// ---------- the island and its lighthouse ----------
+const vec3 ISLE = vec3(-500.0, 0.0, 1500.0);
+const float ISLE_R = 420.0, ISLE_H = 95.0;
+const vec2 LIGHT_XZ = vec2(-418.0, 1253.0);   // on the shore facing the open sea
+
+float isleHeight(vec2 p) {
+  float n = noise(p * 0.004 + 3.0) * 0.65 + noise(p * 0.011 + 7.0) * 0.35;
+  float r = length(p - ISLE.xz) / ISLE_R + (n - 0.5) * 0.5;    // ragged coastline
+  float m = noise(p * 0.007 + 13.0);
+  float k = max(1.0 - r, 0.0);
+  float h = ISLE_H * pow(k, 1.25) * (0.55 + 0.9 * m);
+  h += 14.0 * smoothstep(0.0, 0.08, k);                                 // sea cliffs ringing the coast
+  float ridges = 1.0 - abs(noise(p * 0.022 + 5.0) * 2.0 - 1.0);         // sharp ridges and gullies
+  h += (ridges * 16.0 + noise(p * 0.06 + 2.0) * 5.0) * smoothstep(0.02, 0.25, k);
+  return h - 4.0 - 10.0 * (1.0 - smoothstep(0.0, 0.02, k));
+}
+float isleDetail(vec2 p) {
+  float h = isleHeight(p);
+  return h + (fbm(p * 0.08) - 0.5) * 4.0 * smoothstep(0.0, 10.0, h);  // rocks and gullies
+}
+float lighthouseBase() { return max(isleHeight(LIGHT_XZ), 4.0); }
+
+// ray-marched rocky island: cliffs, grass on the gentle slopes, a beach and a line of surf
+vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
+  tI = 1e5;
+  vec2 oc = ro.xz - ISLE.xz;
+  float a = dot(rd.xz, rd.xz), b = dot(oc, rd.xz), c = dot(oc, oc) - ISLE_R * ISLE_R * 1.7;
+  float disc = b * b - a * c;
+  if (disc < 0.0 || a < 1e-6) return vec4(0.0);
+  float sq = sqrt(disc);
+  float t0 = max((-b - sq) / a, 0.0), t1 = (-b + sq) / a;
+  if (rd.y > 0.0) t1 = min(t1, (ISLE_H * 2.0 - ro.y) / rd.y);
+  else t1 = min(t1, (-4.0 - ro.y) / rd.y);
+  if (t1 <= t0) return vec4(0.0);
+  float dt = (t1 - t0) / 64.0;
+  float t = t0, tp = t0;
+  bool hit = false;
+  for (int i = 0; i < 64; i++) {
+    vec3 p = ro + rd * t;
+    if (p.y < isleHeight(p.xz)) { hit = true; break; }
+    tp = t;
+    t += dt;
+  }
+  if (!hit) return vec4(0.0);
+  for (int i = 0; i < 5; i++) {
+    float tm = 0.5 * (tp + t);
+    vec3 p = ro + rd * tm;
+    if (p.y < isleHeight(p.xz)) t = tm; else tp = tm;
+  }
+  vec3 p = ro + rd * t;
+  if (p.y < -0.5) return vec4(0.0);                       // under the waterline: the sea covers it
+  float e = max(1.0, t * 0.002);
+  float h0 = isleDetail(p.xz);
+  vec3 n = normalize(vec3(h0 - isleDetail(p.xz + vec2(e, 0.0)), e, h0 - isleDetail(p.xz + vec2(0.0, e))));
+  vec3 rock = vec3(0.40, 0.38, 0.35) * (0.8 + 0.4 * noise(p.xz * 0.3 + p.y));
+  vec3 grass = mix(vec3(0.24, 0.32, 0.13), vec3(0.34, 0.36, 0.18), noise(p.xz * 0.05));
+  grass = mix(grass, vec3(0.09, 0.17, 0.07), smoothstep(0.45, 0.7, noise(p.xz * 0.04 + 9.0)) * 0.85); // stands of trees
+  vec3 alb = mix(rock, grass, smoothstep(0.78, 0.9, n.y));
+  alb = mix(vec3(0.82, 0.76, 0.6), alb, smoothstep(1.0, 4.0, p.y));      // beach
+  vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) + SUN_COL * max(dot(n, SUN), 0.0) * 0.95
+                    + MOON_COL * max(dot(n, MOON), 0.0) * 0.6);
+  // surf breaking along the shore
+  float surf = (1.0 - smoothstep(0.0, 1.2, p.y)) * (0.6 + 0.4 * sin(uTime * 1.3 + p.x * 0.05 + p.z * 0.03));
+  col = mix(col, vec3(0.92) * (SKY_AMB * 0.6 + SUN_COL * 0.6), surf * 0.8);
+  col = mix(col, haze, 1.0 - exp(-t * 0.00035));
+  tI = t;
+  return vec4(col, 1.0);
+}
+
+// the lighthouse: a tapering red-and-white tower with a glass lantern room and black cap
+vec4 lighthouse(vec3 ro, vec3 rd, vec3 haze, float hb, out float tL) {
+  tL = 1e5;
+  vec2 v = LIGHT_XZ - ro.xz;
+  float rr = dot(rd.xz, rd.xz);
+  float t = dot(v, rd.xz) / rr;                 // closest approach to the tower's axis
+  if (t <= 0.0) return vec4(0.0);
+  float y = ro.y + rd.y * t - hb;
+  if (y < -2.0 || y > 36.0) return vec4(0.0);
+  vec2 perp = v - rd.xz * t;
+  float dm = length(perp);
+  float pm = PX * t;
+  float R = y < 26.0 ? 4.2 - y * 0.06 : y < 31.0 ? 2.7 : 2.7 * (1.0 - (y - 31.0) / 5.0);
+  float cov = clamp(0.5 - (dm - R) / pm, 0.0, 1.0) * clamp(0.5 - (y - 36.0) / pm, 0.0, 1.0);
+  if (cov <= 0.0) return vec4(0.0);
+  vec2 rgt = normalize(vec2(rd.z, -rd.x));
+  float sp = clamp(-dot(perp, rgt) / R, -1.0, 1.0);
+  vec2 nrm = rgt * sp - normalize(rd.xz) * sqrt(1.0 - sp * sp);
+  float lam = max(dot(nrm, SUN.xz) + SUN.y * 0.3, 0.0);
+  vec3 alb = step(0.5, fract(y / 6.5)) > 0.5 ? vec3(0.75, 0.12, 0.1) : vec3(0.92, 0.92, 0.9);
+  if (y > 25.0 && y < 26.0) alb = vec3(0.1);                          // gallery rail
+  vec3 col = alb * (SKY_AMB * 0.5 + SUN_COL * lam * 0.9);
+  if (y >= 26.0 && y < 31.0) col = mix(vec3(0.15, 0.18, 0.2) * SKY_AMB, vec3(1.0, 0.85, 0.5) * 2.5, 1.0 - DAY); // lantern
+  if (y >= 31.0) col = vec3(0.06) * (SKY_AMB + SUN_COL * lam);
+  col = mix(col, haze, 1.0 - exp(-t * 0.00035));
+  tL = t;
+  return vec4(col, cov);
+}
+
+// two beams sweeping round from the lantern after dark, glowing where they cut through haze,
+// and a dazzling flash each time one swings across you
+vec3 lighthouseBeams(vec3 ro, vec3 rd, float hb, float maxT) {
+  float night = 1.0 - smoothstep(-0.05, 0.12, SUN.y);
+  if (night < 0.01) return vec3(0.0);
+  vec3 L = vec3(LIGHT_XZ.x, hb + 28.5, LIGHT_XZ.y);
+  vec3 acc = vec3(0.0);
+  float ang = uTime * 0.7;
+  vec3 toCam = normalize(ro - L);
+  for (int i = 0; i < 2; i++) {
+    float aa = ang + float(i) * 3.14159;
+    vec3 B = normalize(vec3(cos(aa), -0.015, sin(aa)));
+    vec3 w0 = ro - L;
+    float b = dot(rd, B), d = dot(rd, w0), e = dot(B, w0);
+    float den = max(1.0 - b * b, 1e-4);
+    float tr = (b * e - d) / den, s = (e - b * d) / den;
+    if (s > 0.0 && tr > 0.0 && tr < maxT) {
+      float dist = length(ro + rd * tr - (L + B * s));
+      float wdt = 1.5 + s * 0.035;
+      acc += vec3(1.0, 0.93, 0.75) * exp(-dist * dist / (wdt * wdt)) * exp(-s / 2200.0) * smoothstep(0.0, 30.0, s)
+           * (0.12 + uWeather.y * 60.0);
+    }
+    // looking straight into the beam
+    float facing = pow(max(dot(B, toCam), 0.0), 60.0);
+    float ga = length(rd - normalize(L - ro));
+    acc += vec3(1.0, 0.92, 0.7) * facing * (exp(-ga * ga / (PX * PX * 4.0)) * 30.0 + exp(-ga / (PX * 25.0)) * 1.5);
+  }
+  return acc * night;
+}
+
+// ---------- life on the sea ----------
+float cover(float sdf, float px) { return clamp(0.5 - sdf / px, 0.0, 1.0); }
+float lamp(vec2 d, float px) { return exp(-dot(d, d) / (px * px * 1.5)); }
+
+// a distant boat drawn as a cut-out standing on the sea, seen from wherever you are:
+// type 0 is a sloop under sail, type 1 a container ship. tB = distance along the ray.
+vec4 boat(vec3 ro, vec3 rd, vec4 B, vec3 haze, out float tB) {
+  tB = 1e5;
+  if (uLife.x < 0.01) return vec4(0.0);
+  vec2 v = B.xy - ro.xz;
+  float D = length(v);
+  vec2 nB = v / D;
+  float den = dot(rd.xz, nB);
+  if (den < 0.05) return vec4(0.0);
+  float t = D / den;                       // vertical plane through the boat, facing us
+  vec3 P = ro + rd * t;
+  vec2 side = vec2(-nB.y, nB.x);
+  float lx = dot(P.xz - B.xy, side);
+  bool ship = B.w > 0.5;
+  vec2 hdir = vec2(cos(B.z), sin(B.z));
+  float hs = dot(hdir, side);
+  float sq = max(abs(hs), 0.2);            // end-on it looks short, broadside full length
+  float halfLen = ship ? 80.0 : 7.0;
+  if (abs(lx) > halfLen * sq + 4.0 || P.y > (ship ? 38.0 : 17.0) || P.y < -2.0) return vec4(0.0);
+  // pitching and rolling on the swell
+  float ly = P.y - sin(uTime * 0.9 + B.x) * (ship ? 0.25 : 0.45) - lx * sin(uTime * 0.7 + B.y) * (ship ? 0.004 : 0.05);
+  float u = lx / sq * sign(hs);            // metres along the hull, + toward the bow
+  float pm = PX * t;                       // one pixel in metres out there
+  float pu = pm / sq;
+  vec3 lit = SKY_AMB * 0.6 + SUN_COL * (0.45 + 0.35 * abs(dot(nB, SUN.xz)));
+  vec3 c = vec3(0.0);
+  float a = 0.0, glow = 0.0;
+  vec3 glowC = vec3(0.0);
+  float night = 1.0 - DAY;
+  if (!ship) {
+    float hull = max(max(-0.4 - ly, ly - 0.9), max(u - (6.6 - (0.9 - ly) * 2.4), -5.6 + (0.9 - ly) * 0.9 - u) * sq);
+    float mast = max(abs(u - 0.4) * sq - 0.06, max(0.9 - ly, ly - 15.0));
+    float main = max(max(1.7 - ly, (u - 0.25) * sq), (0.25 - (15.0 - ly) * 0.40 - u) * sq);
+    float jib = max(max(1.5 - ly, (0.6 - u) * sq), (u - 0.6 - (13.6 - ly) * 0.43) * sq);
+    float sail = min(main, jib);
+    float ah = cover(hull, pm), am = cover(mast, pm), as = cover(sail, pm);
+    c = vec3(0.92, 0.93, 0.95) * lit * 0.9;
+    c = mix(c, vec3(0.97, 0.95, 0.9) * lit * mix(1.0, 1.15, step(0.0, dot(nB, SUN.xz))), as);
+    c = mix(c, vec3(0.3) * lit, am * (1.0 - as));
+    a = max(ah, max(as, am));
+    // masthead light and a sidelight after dark
+    glow = lamp(vec2((u - 0.4) * sq, ly - 15.2), pm) + lamp(vec2((u - 5.5) * sq, ly - 1.0), pm);
+    glowC = mix(vec3(1.0, 0.95, 0.85), hs > 0.0 ? vec3(0.1, 1.0, 0.3) : vec3(1.0, 0.15, 0.1),
+                step(ly, 8.0)) * glow;
+  } else {
+    // hull with raked bow, red below the waterline mark
+    float hull = max(max(-1.0 - ly, ly - 9.0), max(u - (70.0 + ly * 1.1), -76.0 - u) * sq);
+    vec3 hc = mix(vec3(0.45, 0.1, 0.08), vec3(0.09, 0.11, 0.15), step(1.8, ly));
+    // stacks of containers in random colours and heights
+    float col6 = floor(u / 6.1);
+    float rnd = hash(vec2(col6, B.x * 0.01));
+    float top = 9.0 + 2.6 * floor(1.0 + rnd * 3.0);
+    float boxes = max(max(9.0 - ly, ly - top), max(u - 58.0, -48.0 - u) * sq);
+    float ci = hash(vec2(col6, floor((ly - 9.0) / 2.6)));
+    vec3 cc = ci < 0.3 ? vec3(0.55, 0.18, 0.1) : ci < 0.55 ? vec3(0.12, 0.25, 0.45) : ci < 0.75 ? vec3(0.5, 0.5, 0.48) : vec3(0.15, 0.4, 0.25);
+    cc *= 0.8 + 0.25 * step(0.3, fract((ly - 9.0) / 2.6));    // seams between rows
+    // white bridge aft with a dark window band, and the funnel
+    float bridge = max(max(9.0 - ly, ly - 30.0), max(u + 52.0, -68.0 - u) * sq);
+    float stack = max(max(20.0 - ly, ly - 34.0), max(u + 66.0, -73.0 - u) * sq);
+    vec3 bc = mix(vec3(0.85, 0.86, 0.88), vec3(0.08), step(26.0, ly) * step(ly, 27.8));
+    float ah = cover(hull, pm), ab = cover(boxes, pm), ar = cover(bridge, pm), af = cover(stack, pm);
+    c = hc * lit;
+    c = mix(c, cc * lit, ab);
+    c = mix(c, bc * lit, ar);
+    c = mix(c, vec3(0.1, 0.1, 0.1) * lit, af);
+    a = max(max(ah, ab), max(ar, af));
+    // deck lights and the bridge lit up at night
+    float deck = step(abs(ly - 9.6), pm * 1.2 + 0.4) * step(0.7, fract(u / 9.0)) * step(abs(u), 70.0);
+    glow = lamp(vec2((u + 60.0) * sq, ly - 33.0), pm) + lamp(vec2((u - 60.0) * sq, ly - 20.0), pm) + deck * 0.6
+         + step(26.0, ly) * step(ly, 27.8) * cover(bridge, pm) * 0.5;
+    glowC = vec3(1.0, 0.85, 0.6) * glow;
+  }
+  if (a <= 0.0 && glow < 0.01) return vec4(0.0);
+  c = c * (1.0 - night * 0.6) + glowC * night * 3.0;
+  a = max(a, min(glow * night, 1.0));
+  c = mix(c, haze, 1.0 - exp(-t * 0.00035));  // distance haze, lighter than the sea's
+  tB = t;
+  return vec4(c, a * uLife.x);
+}
+
+// seagulls: gull-wing silhouettes, flapping in bursts and gliding
+void gulls(vec3 ro, vec3 rd, inout vec3 col, inout float hitT) {
+  if (uLife.y < 0.01) return;
+  for (int i = 0; i < 6; i++) {
+    vec4 b = uBirds[i];
+    vec3 v = b.xyz - ro;
+    float D = length(v);
+    if (D > hitT) continue;
+    vec3 dir = v / D;
+    if (dot(rd, dir) < 0.995) continue;
+    vec3 rgt = normalize(cross(vec3(0.0, 1.0, 0.0), dir));
+    vec3 up = cross(dir, rgt);
+    float hs = 0.75 / D;                       // half wingspan in radians
+    vec2 q = vec2(dot(rd, rgt), dot(rd, up)) / hs;
+    float ax = abs(q.x);
+    if (ax > 1.05 || abs(q.y) > 1.0) continue;
+    float f = b.w;                             // wing pose: -0.6 down .. 1 up
+    float y = ax < 0.4 ? f * 0.5 * ax : f * 0.2 + (ax - 0.4) * (f * 0.2 - 0.35); // the gull's "M"
+    float d = min(abs(q.y - y) - (0.075 * (1.0 - 0.7 * ax) + 0.02), length(q * vec2(0.6, 1.0)) - 0.1);
+    float a = cover(d, PX / hs) * step(ax, 1.0) * uLife.y;
+    vec3 gc = vec3(0.62, 0.64, 0.68) * SKY_AMB + SUN_COL * 0.3 * max(0.2, SUN.y);
+    col = mix(col, gc, a);
+  }
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void camBasis(vec2 look, out vec3 f, out vec3 r, out vec3 u) {
+  f = vec3(sin(look.x) * cos(look.y), sin(look.y), cos(look.x) * cos(look.y));
+  r = normalize(cross(vec3(0, 1, 0), f));
+  u = cross(f, r);
+}
+
+// lighting from sun height and weather: warm near the horizon, dark at night,
+// dimmed by storm clouds and fog, lit up by lightning
+void setupLighting() {
+  SUN = uSun;
+  float el = SUN.y;
+  float gloom = uWeather.z;
+  DAY = smoothstep(-0.15, 0.15, el);
+  vec3 tint = mix(vec3(1.0, 0.42, 0.12), vec3(1.0, 0.95, 0.85), smoothstep(0.0, 0.35, el));
+  SUN_COL = tint * smoothstep(-0.03, 0.03, el) * mix(0.7, 1.0, smoothstep(0.0, 0.3, el));
+  SUN_COL *= (1.0 - gloom * 0.85) * exp(-uWeather.y * 40.0);
+  SKY_AMB = mix(vec3(0.03, 0.04, 0.08), vec3(1.0), DAY) * (1.0 - gloom * 0.5);
+  SKY_AMB += uWeather.w * vec3(0.55, 0.6, 0.75);
+  // dust storms turn all the light ochre
+  SUN_COL *= mix(vec3(1.0), vec3(1.0, 0.72, 0.45), uPrecip.z);
+  SKY_AMB *= mix(vec3(1.0), vec3(1.0, 0.8, 0.58), uPrecip.z * 0.85);
+  // the moon hangs low, roughly opposite the sun
+  float mAz = atan(SUN.x, SUN.z) + 2.6;
+  MOON = uMoon.w > 0.5 ? uMoon.xyz : normalize(vec3(sin(mAz), 0.22, cos(mAz)));
+  MOON_COL = vec3(0.62, 0.72, 0.92) * (1.0 - DAY) * (1.0 - gloom * 0.95) * 0.4 * (0.12 + 0.88 * uStars.x)
+           * smoothstep(-0.02, 0.05, MOON.y);
+  PX = 1.0 / (1.4 * uRes.y);
+}
+
+#ifdef CLOUD_PASS
+// Clouds are marched at half resolution with a fresh random offset every frame and
+// blended with the previous frames, re-aimed to where the camera points now: the
+// dithering noise averages away into smooth clouds that stay put as you look around.
+void main() {
+  setupLighting();
+  vec2 frag = gl_FragCoord.xy;
+  vec3 ro = uPos;
+  RO = ro;
+  vec3 f, r, u;
+  camBasis(uLook, f, r, u);
+  vec2 uv = (frag - 0.5 * uCloudRes) / uCloudRes.y;
+  vec2 jit = (vec2(hash(vec2(uCloudView.z, 3.7)), hash(vec2(uCloudView.z, 8.1))) - 0.5) / uCloudRes.y;
+  vec3 rd = normalize((uv.x + jit.x) * r + (uv.y + jit.y) * u + 1.4 * f);
+  vec4 cl = vec4(0.0, 0.0, 0.0, 1.0);
+  if (ro.y > 0.0 && rd.y > 0.0 && fogAmount(ro, rd, 1e5) < 0.995)
+    cl = cloudMarch(ro, rd, fract(hash(frag) + uCloudView.z * 0.618034));
+  vec4 enc = vec4(cl.rgb / (1.0 + cl.rgb), cl.a);
+
+  // where was this direction on screen last frame?
+  vec3 pf, pr, pu;
+  camBasis(uCloudView.xy, pf, pr, pu);
+  vec3 rd0 = normalize(uv.x * r + uv.y * u + 1.4 * f);
+  float z = dot(rd0, pf);
+  if (uCloudView.w > 0.5 && z > 0.0) {
+    vec2 tc = (1.4 * vec2(dot(rd0, pr), dot(rd0, pu)) / z * uCloudRes.y + 0.5 * uCloudRes) / uCloudRes;
+    if (tc.x > 0.0 && tc.y > 0.0 && tc.x < 1.0 && tc.y < 1.0) {
+      float k = mix(0.12, 0.8, clamp(uWeather.w, 0.0, 1.0)); // lightning must not lag behind
+      enc = mix(texture2D(uTex, tc), enc, k);
+    }
+  }
+  gl_FragColor = enc;
+}
+#else
+void main() {
+  setupLighting();
+  float el = SUN.y;
+  float gloom = uWeather.z;
+
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  float t = uTime;
+
+  vec3 ro = uPos + vec3(0.0, 0.08 * sin(t * 0.6), 0.0);
+  RO = ro;
+  vec3 f, r, u;
+  camBasis(uLook, f, r, u);
+  vec3 rd = normalize(uv.x * r + uv.y * u + 1.4 * f);
+
+  if (ro.y < 0.0) {
+    // diving: a world of its own
+    vec3 uc = aces(underwaterView(ro, rd, t) * uSky.z);
+    vec2 qv = gl_FragCoord.xy / uRes;
+    uc *= 0.8 + 0.2 * pow(16.0 * qv.x * qv.y * (1.0 - qv.x) * (1.0 - qv.y), 0.3);
+    gl_FragColor = vec4(uc, 1.0);
+    return;
+  }
+
+  vec3 horizon = skyBase(normalize(vec3(rd.x, 0.0, rd.z)), false);
+  vec3 col;
+  vec3 boltCol = vec3(0.0);
+  float hitT = 1e5;
+
+  if (rd.y >= -0.0005) {
+    if (fogAmount(ro, rd, hitT) > 0.995) col = horizon;
+    else {
+      // clouds come from the smoothed half-resolution cloud pass
+      vec4 cl = texture2D(uTex, gl_FragCoord.xy / uRes);
+      col = skyBase(rd, true) * cl.a + cl.rgb / max(1.0 - cl.rgb, 0.001);
+    }
+    boltCol = lightningBolt(ro, rd);
+  } else {
+    // intersect the wavy surface (plane + refinement)
+    float tw = -ro.y / rd.y;
+    vec3 w;
+    for (int i = 0; i < 3; i++) {
+      vec3 p = ro + rd * tw;
+      w = waves(p.xz, t, tw);
+      tw = (min(w.x, ro.y - 0.1) - ro.y) / rd.y; // never behind the camera on grazing rays
+    }
+    vec3 p = ro + rd * tw;
+    float dist = tw;
+    hitT = dist;
+    w = waves(p.xz, t, dist);
+    vec3 n = normalize(vec3(-w.y, 1.0, -w.z));
+    float crest = CREST;
+
+    // raindrop and hailstone rings near the camera
+    float drops = max(uWeather.x, uPrecip.y);
+    float splash = 0.0;
+    if (drops > 0.001 && dist < 40.0) {
+      vec3 rp = rainRipples(p.xz, t);
+      float nf = 1.0 - smoothstep(10.0, 40.0, dist);
+      vec2 rg = rp.xy * drops * 0.35 * nf;
+      n = normalize(n + vec3(rg.x, 0.0, rg.y));
+      splash = clamp(rp.z * uPrecip.y * nf, 0.0, 1.0);
+    }
+
+    // reflection
+    vec3 rf = reflect(rd, n);
+    rf.y = abs(rf.y);
+    vec3 refl = skyReflect(p, rf);
+    refl = mix(refl, fogColor(rf), fogAmount(p, rf, 1e5)); // in fog or dust the sea mirrors the murk
+    float shadow = cloudShadow(p);
+    float sd = max(dot(rf, SUN), 0.0);
+    float spec = (pow(sd, 900.0) * 40.0 + pow(sd, 120.0) * 1.2) * (1.0 - shadow);
+
+    // refraction into the water
+    vec3 rr = refract(rd, n, 1.0 / 1.333);
+    float d = floorDepth(p.xz);
+    float tf = d / -rr.y;
+    for (int i = 0; i < 2; i++) {
+      vec3 q = p + rr * tf;
+      d = floorDepth(q.xz);
+      tf = d / -rr.y;
+    }
+    vec3 q = p + rr * tf;
+    vec3 light = SUN_COL * 0.85 * smoothstep(-0.02, 0.4, el) + SKY_AMB * 0.2;
+    vec3 floorCol = seaFloor(q.xz, d, dist) * light * (1.0 - 0.45 * shadow);
+
+    float murk = uWater.y;
+    float pathLen = tf + d * 1.15;                 // view path + sunlight path down
+    vec3 absorb = vec3(0.36, 0.068, 0.045) * murk;
+    vec3 T = exp(-absorb * pathLen);
+    vec3 deep = mix(vec3(0.0, 0.10, 0.20), vec3(0.02, 0.14, 0.14), smoothstep(1.0, 3.0, murk) * 0.6);
+    deep *= SKY_AMB * 0.6 + light * 0.4;
+    vec3 refr = floorCol * T + deep * (1.0 - T);
+    refr = mix(refr, deep * 1.1, smoothstep(40.0, 260.0, dist));
+
+    float cosi = max(dot(n, -rd), 0.0);
+    float F = 0.02 + 0.98 * pow(1.0 - cosi, 5.0);
+    col = mix(refr, refl, F);
+
+    // light glowing through thin wave crests, strongest when looking toward the sun
+    float back = pow(max(dot(normalize(rd.xz), normalize(SUN.xz + 1e-4)), 0.0), 3.0);
+    col += vec3(0.05, 0.42, 0.36) * SUN_COL * crest * crest * (0.15 + back) * 0.5 * (1.0 - F);
+
+    // whitecaps on crests once the wind picks up; only some crests break
+    float windF = smoothstep(4.0, 12.0, uWater.w);
+    float breakers = smoothstep(0.55, 0.8, noise(p.xz * 0.045 + vec2(t * 0.04, 0.0)) + windF * 0.3 - 0.15);
+    float tex = fbm(p.xz * 2.2 + vec2(t * 0.35, 0.0)) * 0.75 + noise(p.xz * 9.0 - t) * 0.25;
+    float foam = crest * breakers * windF * uWater.x;
+    foam = clamp(foam * smoothstep(0.42, 0.62, tex) * 1.5, 0.0, 1.0);
+    // long foam streaks blown along the wind in a gale
+    if (uWater.w > 9.0) {
+      vec2 wdir = vec2(cos(uWave.z), sin(uWave.z));
+      vec2 wq = vec2(dot(p.xz, wdir), dot(p.xz, vec2(-wdir.y, wdir.x)));
+      float streaks = smoothstep(0.62, 0.85, fbm(wq * vec2(0.08, 2.4) - vec2(t * 0.6, 0.0)));
+      streaks *= smoothstep(0.4, 0.65, tex); // broken up, not solid bands
+      foam = max(foam, streaks * smoothstep(9.0, 16.0, uWater.w) * 0.35 * uWater.x);
+    }
+    foam *= 1.0 - smoothstep(60.0, 400.0, dist);
+    foam = max(foam, splash);
+    vec3 foamCol = vec3(0.92) * (SUN_COL * max(el, 0.0) * 1.2 + SKY_AMB * 0.55);
+    col = mix(col, foamCol, foam);
+    col += SUN_COL * spec * (1.0 - foam);
+
+    // moonlight path on the water
+    float md = max(dot(rf, MOON), 0.0);
+    col += MOON_COL * (pow(md, 1400.0) * 30.0 + pow(md, 120.0) * 0.8) * (1.0 - foam);
+
+    // glowing plankton lights up wherever the water is stirred, after dark
+    float bio = uNight.y * (1.0 - DAY);
+    if (bio > 0.01) {
+      // only some crests flare up, broken into flecks; plus scattered pinpricks
+      float patchy = smoothstep(0.55, 0.8, noise(p.xz * 0.06 + vec2(t * 0.05, 3.0)));
+      float stir = foam * 2.0 + crest * patchy * smoothstep(0.55, 0.8, tex) + splash;
+      float spark = smoothstep(0.9, 0.98, noise(p.xz * 7.0 + t * 0.5)) * smoothstep(0.2, 0.8, crest + 0.3 * patchy);
+      col += vec3(0.05, 0.6, 1.0) * (stir * 0.7 + spark * 0.5) * bio * (1.0 - smoothstep(15.0, 180.0, dist));
+    }
+
+    // aerial haze toward the horizon
+    col = mix(col, horizon, 1.0 - exp(-dist * 0.0022));
+  }
+
+  // the island and its lighthouse
+  float hb = lighthouseBase();
+  float tI;
+  vec4 isl = island(ro, rd, horizon, tI);
+  if (isl.a > 0.0 && tI < hitT) { col = isl.rgb; hitT = tI; }
+  float tL;
+  vec4 lh = lighthouse(ro, rd, horizon, hb, tL);
+  if (lh.a > 0.0 && tL < hitT) { col = mix(col, lh.rgb, lh.a); if (lh.a > 0.5) hitT = tL; }
+
+  // boats on the sea and gulls overhead, in front of whatever lies behind them
+  float tB;
+  vec4 bt = boat(ro, rd, uBoatA, horizon, tB);
+  if (bt.a > 0.0 && tB < hitT) { col = mix(col, bt.rgb, bt.a); if (bt.a > 0.5) hitT = tB; }
+  bt = boat(ro, rd, uBoatB, horizon, tB);
+  if (bt.a > 0.0 && tB < hitT) { col = mix(col, bt.rgb, bt.a); if (bt.a > 0.5) hitT = tB; }
+  gulls(ro, rd, col, hitT);
+
+  // fog, rain haze and sea spray; lightning is bright enough to punch through it
+  float fogA = fogAmount(ro, rd, hitT);
+  vec3 fogC = fogColor(rd);
+  col = mix(col, fogC, fogA);
+
+  // waterspout in front of the scene, hazed by the air in between
+  float tS;
+  vec4 spout = waterspout(ro, rd, tS);
+  if (spout.a > 0.0 && tS < hitT) col = mix(col, mix(spout.rgb, fogC, fogAmount(ro, rd, tS)), spout.a);
+
+  // pale sun disc glowing through dust or thin fog
+  if (rd.y > 0.0) {
+    float hz = max(uPrecip.z, smoothstep(0.006, 0.02, uWeather.y) * (1.0 - gloom)) * (1.0 - smoothstep(0.7, 1.0, uSky.x));
+    col += mix(vec3(1.0, 0.97, 0.92), vec3(1.0, 0.7, 0.45), uPrecip.z)
+         * smoothstep(0.9993, 0.99965, dot(rd, SUN)) * hz * fogA * smoothstep(-0.03, 0.03, el) * 1.4;
+  }
+
+  // gusts of blown dust, spindrift and spray streaming past
+  if (uWind.z > 0.01) col = mix(col, fogC * 1.08, veils(ro, rd, hitT) * uWind.z);
+
+  col += boltCol * pow(1.0 - fogA, 0.3);
+  col += lighthouseBeams(ro, rd, hb, hitT) * pow(1.0 - fogA, 0.4);
+
+  // rainbow in the far rain once the sun breaks through
+  if (uPrecip.w > 0.005) {
+    float dark;
+    vec3 bow = rainbow(rd, dark);
+    float b = uPrecip.w * smoothstep(200.0, 2000.0, hitT) * (1.0 - fogA * 0.6);
+    col = col * (1.0 - dark * 0.15 * b) + bow * SUN_COL * b * 0.4;
+  }
+
+  // falling rain, hail and snow, laid out by view angle so they stay put when you look around
+  if (uWeather.x + uPrecip.x + uPrecip.y > 0.001) {
+    vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+    float side = dot(r.xz, wd) * uWater.w;           // crosswind as seen from here
+    float elv = asin(clamp(rd.y, -1.0, 1.0));
+    float az = atan(rd.x, rd.z);
+    float px = 1.0 / (1.4 * uRes.y);                 // radians per pixel
+    if (uWeather.x > 0.001) {
+      vec2 a = vec2(az + elv * side * 0.02, elv);
+      float amt = uWeather.x;
+      float rn = rainLayer(a, 55.0, 0.10, 2.6, 0.30, 1.0, px, amt) * 0.6
+               + rainLayer(a, 130.0, 0.05, 1.4, 0.40, 2.0, px, amt) * 0.4
+               + rainLayer(a, 280.0, 0.025, 0.75, 0.50, 3.0, px, amt) * 0.25;
+      col += (SKY_AMB * 0.6 + SUN_COL * 0.1) * vec3(0.85, 0.9, 1.0) * rn * amt;
+    }
+    if (uPrecip.y > 0.001) {
+      // hail: short bright pellets falling hard
+      vec2 a = vec2(az + elv * side * 0.012, elv);
+      float amt = uPrecip.y;
+      float hl = rainLayer(a, 45.0, 0.022, 3.0, 0.35, 5.0, px, amt)
+               + rainLayer(a, 100.0, 0.012, 2.2, 0.45, 6.0, px, amt) * 0.6;
+      col += (SKY_AMB * 1.1 + SUN_COL * 0.3) * hl * amt;
+    }
+    if (uPrecip.x > 0.001) {
+      // snow drifts down slowly and gets driven sideways by strong wind
+      vec2 a = vec2(az + elv * side * 0.06, elv);
+      float amt = uPrecip.x;
+      float fall = 1.0 + uWater.w * 0.05;
+      float sn = snowLayer(a, 14.0, 1.8 * fall, 0.25 * amt, 7.0, px) * 0.9
+               + snowLayer(a, 30.0, 2.2 * fall, 0.32 * amt, 8.0, px) * 0.8
+               + snowLayer(a, 65.0, 2.5 * fall, 0.38 * amt, 9.0, px) * 0.6
+               + snowLayer(a, 140.0, 2.8 * fall, 0.42 * amt, 10.0, px) * 0.45;
+      col = mix(col, vec3(0.95, 0.97, 1.0) * (SKY_AMB * 0.9 + SUN_COL * 0.35), clamp(sn, 0.0, 1.0));
+    }
+  }
+
+  col = aces(col * uSky.z);
+  // subtle vignette
+  vec2 q2 = gl_FragCoord.xy / uRes;
+  col *= 0.88 + 0.12 * pow(16.0 * q2.x * q2.y * (1.0 - q2.x) * (1.0 - q2.y), 0.25);
+  gl_FragColor = vec4(col, 1.0);
+}
+#endif
+</script>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+  if (!gl) { document.body.textContent = 'WebGL is not available in this browser.'; return; }
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  // one shader source, compiled twice: the half-resolution cloud pass and the main scene
+  const NAMES = ['uRes', 'uTime', 'uLook', 'uPos', 'uSun', 'uWave', 'uWater', 'uSky', 'uWeather', 'uBolt',
+                 'uPrecip', 'uSpout', 'uWind', 'uNight', 'uStars', 'uTex', 'uCloudView', 'uCloudRes',
+                 'uBoatA', 'uBoatB', 'uBirds', 'uLife', 'uMoon', 'uMoonSun', 'uSkyRot'];
+  const vsSrc = document.getElementById('vs').text, fsSrc = document.getElementById('fs').text;
+  function program(defines) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, defines + fsSrc));
+    gl.bindAttribLocation(p, 0, 'aPos');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const loc = {};
+    for (const n of NAMES) loc[n] = gl.getUniformLocation(p, n);
+    return { p, loc };
+  }
+  const mainProg = program('');
+  const cloudProg = program('#define CLOUD_PASS\n');
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  // two cloud buffers, swapped every frame (one is written while the other is the history);
+  // half-float keeps the slow blending free of banding where the GPU supports it
+  const halfExt = gl.getExtension('OES_texture_half_float');
+  const halfLinear = gl.getExtension('OES_texture_half_float_linear');
+  gl.getExtension('EXT_color_buffer_half_float');
+  let texType = halfExt && halfLinear ? halfExt.HALF_FLOAT_OES : gl.UNSIGNED_BYTE;
+  function makeTarget(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, texType, null);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    if (texType !== gl.UNSIGNED_BYTE && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      texType = gl.UNSIGNED_BYTE; // half-float not renderable here: fall back
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, texType, null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fb };
+  }
+  let targets = [], cloudW = 0, cloudH = 0, cur = 0, histOk = false;
+
+  // render resolution adapts to keep the GPU (and the rest of the machine) responsive
+  const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
+  let renderScale = 0.5;
+  function resize() {
+    const s = maxDpr * renderScale;
+    canvas.width = Math.max(1, Math.floor(window.innerWidth * s));
+    canvas.height = Math.max(1, Math.floor(window.innerHeight * s));
+    const w = Math.ceil(canvas.width / 2), h = Math.ceil(canvas.height / 2);
+    if (w !== cloudW || h !== cloudH) {
+      for (const t of targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
+      targets = [makeTarget(w, h), makeTarget(w, h)];
+      cloudW = w; cloudH = h; histOk = false;
+    }
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  let perfTime = 0, perfFrames = 0;
+  function adaptResolution(dt) {
+    perfTime += dt; perfFrames++;
+    if (perfTime < 1.5) return;
+    const fps = perfFrames / perfTime;
+    perfTime = 0; perfFrames = 0;
+    const old = renderScale;
+    if (fps < 45) renderScale = Math.max(0.3, renderScale * 0.88);
+    else if (fps > 57) renderScale = Math.min(1, renderScale * 1.06);
+    if (renderScale !== old) resize();
+  }
+
+  // ---------- settings ----------
+  // [key, label, unit, min, max, step, default, section]
+  const DEFS = [
+    ['windSpeed',  'Wind speed',      ' m/s', 2,   25,  0.1,  5,    'Waves'],
+    ['windDir',    'Wind direction',  '°',    0,   360, 1,    20,   'Waves'],
+    ['choppy',     'Choppiness',      '',     0.5, 2.5, 0.01, 1,    'Waves'],
+    ['foam',       'Foam',            '',     0,   2,   0.01, 1,    'Waves'],
+    ['murk',       'Water murkiness', '',     0.3, 3,   0.01, 1,    'Water'],
+    ['depth',      'Sea depth',       '×',    0.3, 5,   0.01, 1,    'Water'],
+    ['glow',       'Glowing plankton (night)', '', 0, 1, 0.01, 0.7, 'Water'],
+    ['sunElev',    'Sun height',      '°',    -18, 70,  0.1,  30,   'Sky'],
+    ['sunAzim',    'Sun direction',   '°',    -180, 180, 0.5, 59,   'Sky'],
+    ['clouds',     'Clouds',          '',     0,   1,   0.01, 0.5,  'Sky'],
+    ['cloudSpeed', 'Cloud speed',     '×',    0,   4,   0.01, 1,    'Sky'],
+    ['planes',     'Air traffic',     '',     0,   1,   0.01, 1,    'Sky'],
+    ['moon',       'Moon phase (new → full)', '', 0, 1, 0.01, 0.75, 'Night sky'],
+    ['stars',      'Stars & Milky Way', '',   0,   1.5, 0.01, 1,    'Night sky'],
+    ['sats',       'Satellites',      '',     0,   1,   0.01, 1,    'Night sky'],
+    ['meteors',    'Shooting stars',  '',     0,   1,   0.01, 0.4,  'Night sky'],
+    ['aurora',     'Northern lights', '',     0,   1,   0.01, 0,    'Night sky'],
+    ['rain',       'Rain',            '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['snow',       'Snow',            '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['hail',       'Hail',            '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['fog',        'Fog',             '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['dust',       'Sand / dust',     '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['lightning',  'Lightning',       '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['spout',      'Waterspout',      '',     0,   1,   0.01, 0,    'Weather effects'],
+    ['life',       'Boats & seagulls', '',    0,   1,   0.01, 1,    'Life & sound'],
+    ['volume',     'Sound volume',    '',     0,   1,   0.01, 0.6,  'Life & sound'],
+    ['exposure',   'Exposure',        '',     0.4, 2.5, 0.01, 1.05, 'Image'],
+  ];
+  const DEFAULTS = Object.fromEntries(DEFS.map(d => [d[0], d[6]]));
+  const CALM = { rain: 0, snow: 0, hail: 0, fog: 0, dust: 0, lightning: 0, spout: 0, aurora: 0 };
+  const sea = (windSpeed, choppy, foam, murk, clouds, cloudSpeed) => ({ ...CALM, windSpeed, choppy, foam, murk, clouds, cloudSpeed });
+  const wrapDeg = d => ((d % 360) + 540) % 360 - 180;
+  const WEATHER = {
+    Sunny:      { icon: '☀️', v: sea(4.5, 1.0, 0.8, 1.0, 0.3, 0.8) },
+    Cloudy:     { icon: '⛅', v: { ...sea(6, 1.0, 1.0, 1.2, 0.85, 1.2), fog: 0.05 } },
+    Overcast:   { icon: '☁️', v: { ...sea(6.5, 1.1, 1.0, 1.4, 1.0, 0.9), fog: 0.12 } },
+    Drizzle:    { icon: '🌦️', v: { ...sea(5, 1.0, 0.9, 1.4, 0.95, 1.0), rain: 0.3, fog: 0.3 } },
+    Rainy:      { icon: '🌧️', v: { ...sea(8, 1.2, 1.0, 1.5, 0.95, 1.6), rain: 0.7, fog: 0.15 } },
+    Stormy:     { icon: '⛈️', v: { ...sea(17, 1.9, 1.8, 2.0, 1.0, 3.0), rain: 1.0, fog: 0.25, lightning: 0.8 } },
+    Foggy:      { icon: '🌫️', v: { ...sea(2.5, 0.9, 0.5, 1.2, 0.6, 0.4), fog: 0.8 } },
+    Haze:       { icon: '🌁', v: { ...sea(4, 0.9, 0.7, 1.3, 0.15, 0.6), dust: 0.3, fog: 0.1 } },
+    Windy:      { icon: '💨', v: { ...sea(14, 1.6, 1.5, 1.4, 0.45, 3.5), fog: 0.05 } },
+    Snowy:      { icon: '🌨️', v: { ...sea(5, 1.0, 0.9, 1.3, 0.95, 0.8), snow: 0.7, fog: 0.25 } },
+    Sleet:      { icon: '🧊', v: { ...sea(8, 1.2, 1.1, 1.5, 1.0, 1.4), rain: 0.45, snow: 0.4, fog: 0.2 } },
+    Blizzard:   { icon: '❄️', v: { ...sea(18, 1.9, 1.7, 1.6, 1.0, 3.5), snow: 1.0, fog: 0.55 } },
+    Hail:       { icon: '🌩️', v: { ...sea(11, 1.5, 1.4, 1.6, 1.0, 2.2), hail: 0.85, rain: 0.35, fog: 0.12, lightning: 0.35 } },
+    Sandstorm:  { icon: '🏜️', v: { ...sea(15, 1.5, 1.2, 2.5, 0.2, 3.0), dust: 1.0 } },
+    Hurricane:  { icon: '🌀', v: { ...sea(25, 2.4, 2.0, 2.5, 1.0, 4.0), rain: 1.0, fog: 0.35, lightning: 0.35 } },
+    Waterspout: { icon: '🌪️', v: { ...sea(9, 1.3, 1.2, 1.5, 0.95, 1.4), spout: 1.0, lightning: 0.1 } },
+    // a light shower with the sun behind you; the sun swings round so the bow is in front
+    Rainbow:    { icon: '🌈', time: null, v: () => ({ ...sea(5, 1.0, 0.9, 1.1, 0.45, 1.0), rain: 0.15, sunElev: 32, sunAzim: wrapDeg(yaw * 180 / Math.PI + 180), exposure: 1.05 }) },
+    Aurora:     { icon: '🌌', time: 'Night', lookUp: true, v: { ...sea(3.5, 0.9, 0.6, 0.9, 0.12, 0.5), aurora: 1.0, glow: 1.0, moon: 0.35, sunElev: -16, sunAzim: 180, exposure: 2.4 } },
+    // dark, moonless and clear: the Milky Way at its best
+    'Starry night':  { icon: '✨', time: 'Night', lookUp: true, v: { ...sea(3, 0.9, 0.5, 0.9, 0.05, 0.4), moon: 0.03, stars: 1.2, meteors: 0.4, sunElev: -18, sunAzim: 180, exposure: 2.5 } },
+    'Meteors':       { icon: '🌠', time: 'Night', lookUp: true, v: { ...sea(3, 0.9, 0.5, 0.9, 0.08, 0.4), moon: 0.1, stars: 1.1, meteors: 1.0, sunElev: -18, sunAzim: 180, exposure: 2.5 } },
+    'Full moon':     { icon: '🌕', time: 'Night', lookUp: true, v: { ...sea(4, 1.0, 0.6, 1.0, 0.3, 0.6), moon: 1.0, sunElev: -16, sunAzim: 180, exposure: 2.2 } },
+  };
+  const TIMES = {
+    'Dawn':        { icon: '🌄', v: { sunElev: 1,  sunAzim: -100, exposure: 1.3 } },
+    'Morning':     { icon: '🌤️', v: { sunElev: 14, sunAzim: -50,  exposure: 1.1 } },
+    'Noon':        { icon: '🌞', v: { sunElev: 30, sunAzim: 59,   exposure: 1.05 } },
+    'Golden hour': { icon: '🌅', v: { sunElev: 4,  sunAzim: 8,    exposure: 1.15 } },
+    'Twilight':    { icon: '🌆', v: { sunElev: -3, sunAzim: 0,    exposure: 1.6 } },
+    'Night':       { icon: '🌙', lookUp: true, v: { sunElev: -16, sunAzim: 180, exposure: 2.4 } },
+  };
+
+  const STORE_KEY = 'ocean-settings-v1';
+  const S = { ...DEFAULTS, weather: null, time: null }; // targets: what the sliders show
+  try { Object.assign(S, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
+  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) {} }
+  const C = { ...S }; // what the scene shows right now; eases toward S
+  const rate = Object.fromEntries(Object.keys(DEFAULTS).map(k => [k, 8]));
+
+  const panel = document.getElementById('panel');
+  const sliders = document.getElementById('sliders');
+  const inputs = {};
+  let section = null, group = null;
+  for (const [key, label, unit, min, max, step, , sec] of DEFS) {
+    if (sec !== section) {
+      // each slider section folds away so the panel stays tidy
+      section = sec;
+      group = document.createElement('details');
+      group.className = 'group';
+      group.innerHTML = `<summary>${sec}</summary>`;
+      sliders.appendChild(group);
+    }
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label for="s-${key}">${label}</label><output></output>
+      <input id="s-${key}" type="range" min="${min}" max="${max}" step="${step}">`;
+    const input = row.querySelector('input');
+    const out = row.querySelector('output');
+    const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+    const show = () => { out.textContent = (+S[key]).toFixed(decimals) + unit; };
+    input.value = S[key];
+    show();
+    input.addEventListener('input', () => {
+      S[key] = +input.value; rate[key] = 8; show(); save();
+      if (key === 'sunElev' || key === 'sunAzim' || key === 'moon') setReal(false);
+    });
+    inputs[key] = { input, show };
+    group.appendChild(row);
+  }
+  // presets ease in slowly, so a weather change rolls in over a few seconds
+  function setTargets(values, speed) {
+    for (const k in values) { S[k] = values[k]; rate[k] = speed; }
+    for (const k in inputs) { inputs[k].input.value = S[k]; inputs[k].show(); }
+    save();
+  }
+  function applyPreset(defs, key, name, speed) {
+    const p = defs[name];
+    S[key] = name;
+    if ('time' in p) S.time = p.time; // presets that also move the sun
+    if (key === 'time' || 'time' in p) setReal(false); // a chosen time replaces the real one
+    if (p.lookUp) tPitch = Math.max(tPitch, 0.14); // tilt the view up to the night sky
+    setTargets(typeof p.v === 'function' ? p.v() : p.v, speed);
+    markPresets();
+  }
+  function presetButtons(id, defs, key) {
+    const box = document.getElementById(id);
+    const btns = {};
+    for (const name in defs) {
+      const b = document.createElement('button');
+      b.innerHTML = `<span class="ic">${defs[name].icon}</span><span>${name}</span>`;
+      b.addEventListener('click', () => { applyPreset(defs, key, name, 0.7); autoTimer = AUTO_EVERY; });
+      box.appendChild(b);
+      btns[name] = b;
+    }
+    return btns;
+  }
+  const weatherBtns = presetButtons('weather', WEATHER, 'weather');
+  const timeBtns = presetButtons('times', TIMES, 'time');
+  function markPresets() {
+    for (const n in weatherBtns) weatherBtns[n].setAttribute('aria-pressed', String(S.weather === n));
+    for (const n in timeBtns) timeBtns[n].setAttribute('aria-pressed', String(S.time === n));
+    autoBtn.setAttribute('aria-pressed', String(!!S.auto));
+  }
+
+  // live weather: the sky drifts from one plausible weather to the next by itself
+  const NEXT = {
+    Sunny: ['Cloudy', 'Windy', 'Haze', 'Cloudy'],     Cloudy: ['Overcast', 'Drizzle', 'Sunny', 'Windy'],
+    Overcast: ['Rainy', 'Drizzle', 'Snowy', 'Foggy'], Drizzle: ['Rainy', 'Rainbow', 'Foggy'],
+    Rainy: ['Stormy', 'Rainbow', 'Hail', 'Sleet'],    Stormy: ['Rainy', 'Hurricane', 'Hail', 'Waterspout'],
+    Foggy: ['Cloudy', 'Sunny', 'Drizzle'],            Haze: ['Sandstorm', 'Sunny'],
+    Windy: ['Sandstorm', 'Stormy', 'Cloudy'],         Snowy: ['Blizzard', 'Sleet', 'Overcast'],
+    Sleet: ['Snowy', 'Rainy'],                        Blizzard: ['Snowy', 'Overcast'],
+    Hail: ['Rainy', 'Stormy'],                        Sandstorm: ['Haze', 'Windy'],
+    Hurricane: ['Stormy', 'Rainy'],                   Waterspout: ['Stormy', 'Rainy', 'Cloudy'],
+    Rainbow: ['Sunny', 'Cloudy'],                     Aurora: ['Cloudy', 'Snowy'],
+  };
+  const AUTO_EVERY = 50;
+  let autoTimer = AUTO_EVERY;
+  const autoBtn = document.getElementById('auto');
+  autoBtn.addEventListener('click', () => {
+    S.auto = !S.auto;
+    autoTimer = 0.5; // first change right away
+    save();
+    markPresets();
+  });
+  function autoStep() {
+    const opts = NEXT[S.weather] || ['Cloudy'];
+    applyPreset(WEATHER, 'weather', opts[Math.floor(Math.random() * opts.length)], 0.3);
+  }
+
+  // ---------- the real sky: sun, moon and stars for your place and time ----------
+  const RAD = Math.PI / 180, OBL = 23.4397 * RAD;
+  const eqVec = (ra, dec) => [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)];
+  function eclToEq(l, b) {
+    return eqVec(Math.atan2(Math.sin(l) * Math.cos(OBL) - Math.tan(b) * Math.sin(OBL), Math.cos(l)),
+                 Math.asin(Math.sin(b) * Math.cos(OBL) + Math.cos(b) * Math.sin(OBL) * Math.sin(l)));
+  }
+  function sunEq(d) { // low-precision solar position, d = days since J2000
+    const M = RAD * (357.5291 + 0.98560028 * d);
+    const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+    return eclToEq(M + C + RAD * 102.9372 + Math.PI, 0);
+  }
+  function moonEq(d) { // good to about a degree
+    const L = RAD * (218.316 + 13.176396 * d), M = RAD * (134.963 + 13.064993 * d), F = RAD * (93.272 + 13.229350 * d);
+    return eclToEq(L + RAD * 6.289 * Math.sin(M), RAD * 5.128 * Math.sin(F));
+  }
+  // celestial unit vector -> local sky (x east, y up, z north) at sidereal time lst and latitude lat
+  function toLocal(v, lst, lat) {
+    const ra = Math.atan2(v[1], v[0]), dec = Math.asin(v[2]), H = lst - ra;
+    return [-Math.cos(dec) * Math.sin(H),
+            Math.sin(dec) * Math.sin(lat) + Math.cos(dec) * Math.cos(H) * Math.cos(lat),
+            Math.sin(dec) * Math.cos(lat) - Math.cos(dec) * Math.cos(H) * Math.sin(lat)];
+  }
+  const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // rotation taking the frame (a1, b1) onto (a2, b2), column-major for GLSL
+  function frameRot(a1, b1, a2, b2) {
+    const F1 = [a1, b1, cross3(a1, b1)], F2 = [a2, b2, cross3(a2, b2)];
+    const m = new Float32Array(9);
+    for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) {
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += F2[k][r] * F1[k][c];
+      m[c * 3 + r] = s;
+    }
+    return m;
+  }
+  const GAL_N = [-0.86765, -0.19807, 0.45604], GAL_C = [-0.05495, -0.87338, -0.48393];
+  // with the real sky off, the Milky Way arches up out of the sea in front of you
+  const DEFAULT_SKY = frameRot([-0.943, -0.276, 0.188], [0.173, 0.075, 0.981], GAL_N, GAL_C);
+  const real = { on: false, lat: 20, lon: 0, place: '', located: false, skyRot: DEFAULT_SKY, moon: [0, -1, 0], sun: [0, 1, 0], timer: 0 };
+  const realBtn = document.getElementById('realsky'), realInfo = document.getElementById('realinfo');
+  const fmtPlace = () => `${Math.abs(real.lat).toFixed(1)}°${real.lat >= 0 ? 'N' : 'S'} ${Math.abs(real.lon).toFixed(1)}°${real.lon >= 0 ? 'E' : 'W'}`;
+  function locate() {
+    // a first guess from the clock's time zone, refined if the browser shares your location
+    real.located = true;
+    const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+    real.lon = -new Date().getTimezoneOffset() / 4;
+    real.lat = /Kolkata|Calcutta|Colombo/.test(tz) ? 13 : /America/.test(tz) ? 38 : /Europe/.test(tz) ? 48
+             : /Australia/.test(tz) ? -30 : /Tokyo|Seoul|Shanghai/.test(tz) ? 35 : 20;
+    real.place = fmtPlace() + ' (approx.)';
+    if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => {
+      real.lat = p.coords.latitude;
+      real.lon = p.coords.longitude;
+      real.place = fmtPlace();
+      if (real.on) updateRealSky();
+    }, () => {}, { timeout: 10000, maximumAge: 3600000 });
+  }
+  function updateRealSky() {
+    const now = new Date();
+    const d = now.valueOf() / 86400000 - 10957.5;                       // days since J2000
+    const lat = real.lat * RAD, lst = RAD * (280.16 + 360.9856235 * d) + real.lon * RAD;
+    const s = sunEq(d), m = moonEq(d);
+    real.sun = toLocal(s, lst, lat);
+    real.moon = toLocal(m, lst, lat);
+    real.skyRot = frameRot(toLocal(GAL_N, lst, lat), toLocal(GAL_C, lst, lat), GAL_N, GAL_C);
+    const elev = Math.asin(real.sun[1]) / RAD;
+    const lit = (1 - (s[0] * m[0] + s[1] * m[1] + s[2] * m[2])) / 2; // fraction of the moon lit
+    setTargets({
+      sunElev: Math.max(-18, elev), sunAzim: Math.atan2(real.sun[0], real.sun[2]) / RAD, moon: lit,
+      exposure: elev < -8 ? 2.4 : elev < -2 ? 1.7 : elev < 6 ? 1.2 : 1.05,
+    }, 0.6);
+    const hm = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    realInfo.textContent = `${real.place} · ${hm} · sun ${elev.toFixed(0)}° · moon ${Math.round(lit * 100)}% lit`
+      + (real.moon[1] < 0 ? ' (set)' : '');
+  }
+  function setReal(on) {
+    real.on = on;
+    if (S.real !== on) { S.real = on; save(); }
+    realBtn.setAttribute('aria-pressed', String(on));
+    realInfo.hidden = !on;
+    if (on) {
+      if (!real.located) locate();
+      S.time = null;
+      markPresets();
+      updateRealSky();
+    }
+  }
+  realBtn.addEventListener('click', () => setReal(!real.on));
+
+  markPresets();
+  if (S.real) setReal(true);
+  document.getElementById('reset').addEventListener('click', () => {
+    S.weather = null; S.time = null;
+    setTargets(DEFAULTS, 1.5);
+    markPresets();
+  });
+  const togglePanel = () => panel.classList.toggle('hidden');
+  document.getElementById('gear').addEventListener('click', togglePanel);
+  document.getElementById('close').addEventListener('click', togglePanel);
+
+  // ---------- camera controls ----------
+  // drag to look around
+  let yaw = 0, pitch = -0.16, tYaw = yaw, tPitch = pitch, drag = null;
+  canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('pointermove', e => {
+    if (!drag) return;
+    tYaw -= (e.clientX - drag.x) * 0.004;
+    tPitch = Math.max(-1.2, Math.min(0.5, tPitch + (e.clientY - drag.y) * 0.004));
+    drag = { x: e.clientX, y: e.clientY };
+  });
+
+  // keyboard movement
+  const keys = new Set();
+  const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
+  window.addEventListener('keydown', e => {
+    const inControl = e.target instanceof HTMLElement && e.target.closest('#panel, #gear');
+    if (inControl && (e.code.startsWith('Arrow') || e.code === 'Space' || e.code === 'Enter')) return;
+    if (e.code === 'KeyH' && !e.repeat) { togglePanel(); return; }
+    if (e.code === 'KeyM' && !e.repeat) { toggleSound(); return; }
+    if (e.code === 'KeyP' && !e.repeat) { takePhoto(); return; }
+    keys.add(e.code);
+    if (MOVE_KEYS.includes(e.code)) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+  // scroll wheel also changes height (but scrolls the panel when over it)
+  let wheelLift = 0;
+  window.addEventListener('wheel', e => {
+    if (e.target instanceof HTMLElement && e.target.closest('#panel')) return;
+    wheelLift -= e.deltaY * 0.01;
+    e.preventDefault();
+  }, { passive: false });
+
+  const pos = { x: 0, y: 2.3, z: 0 };
+  let underwater = false;
+  // the shader's seabed height, mirrored in 32-bit maths so the diver stops right above the sand
+  const f32 = Math.fround, fr = x => x - Math.floor(x);
+  function hashJS(x, y) {
+    let px = fr(f32(x * 123.34)), py = fr(f32(y * 456.21));
+    const d = f32(f32(px * f32(px + 45.32)) + f32(py * f32(py + 45.32)));
+    px = f32(px + d); py = f32(py + d);
+    return fr(f32(px * py));
+  }
+  function noiseJS(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const a = hashJS(ix, iy), b = hashJS(ix + 1, iy), c = hashJS(ix, iy + 1), d = hashJS(ix + 1, iy + 1);
+    return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
+  }
+  function fbmJS(x, y) {
+    let v = 0, a = 0.5;
+    for (let i = 0; i < 5; i++) { v += a * noiseJS(x, y); [x, y] = [1.6 * x - 1.2 * y, 1.2 * x + 1.6 * y]; a *= 0.5; }
+    return v;
+  }
+  // the island's height, mirrored from the shader so you fly over it rather than through it
+  const ISLE = { x: -500, z: 1500, r: 420, h: 95 };
+  function isleHeightJS(x, z) {
+    const n = noiseJS(x * 0.004 + 3, z * 0.004 + 3) * 0.65 + noiseJS(x * 0.011 + 7, z * 0.011 + 7) * 0.35;
+    const r = Math.hypot(x - ISLE.x, z - ISLE.z) / ISLE.r + (n - 0.5) * 0.5;
+    const m = noiseJS(x * 0.007 + 13, z * 0.007 + 13);
+    const k = Math.max(1 - r, 0);
+    let h = ISLE.h * Math.pow(k, 1.25) * (0.55 + 0.9 * m) + 14 * smooth(0, 0.08, k);
+    const ridges = 1 - Math.abs(noiseJS(x * 0.022 + 5, z * 0.022 + 5) * 2 - 1);
+    h += (ridges * 16 + noiseJS(x * 0.06 + 2, z * 0.06 + 2) * 5) * smooth(0.02, 0.25, k);
+    return h - 4 - 10 * (1 - smooth(0, 0.02, k));
+  }
+  function floorDepthJS(x, z) {
+    const n = fbmJS(x * 0.03 + 7, z * 0.03 + 7);
+    let d = 1 + 8 * smooth(0.40, 0.66, n);
+    d += (fbmJS(x * 0.45, z * 0.45) - 0.5) * 0.5;
+    d += 0.04 * Math.sin(x * 2.6 + Math.sin(z * 1.1) * 2.5);
+    return d;
+  }
+  const vel = { x: 0, y: 0, z: 0 };
+  const MAX_Y = 80;
+
+  const hint = document.getElementById('hint');
+  setTimeout(() => { hint.style.opacity = '0'; }, 6000);
+
+  const fpsEl = document.getElementById('fps');
+  let fpsFrames = 0, fpsTime = 0;
+
+  // ---------- lightning ----------
+  // each strike is a few quick flickers; the bolt lands somewhere ahead of the viewer
+  const PULSES = [[0, 1.0], [0.08, 0.45], [0.19, 0.85], [0.34, 0.3]];
+  const bolt = { x: 0, z: 0, vis: 0, seed: 0, power: 1 };
+  let strikeT = -1, nextStrike = 2 + Math.random() * 4;
+
+  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+  const spout = { x: 0, z: 0, placed: false, grow: 0 };
+  const windOff = { x: 0, z: 0 };
+  let wet = 0;
+
+  let prevLook = [yaw, pitch], frameNo = 0;
+
+  // ---------- photo mode ----------
+  // hides the controls, renders one full-resolution frame and downloads it as a PNG
+  let photoPending = false;
+  const flashEl = document.getElementById('flash');
+  function takePhoto() {
+    if (photoPending) return;
+    document.body.classList.add('shooting');
+    photoPending = true;
+  }
+  function savePhoto() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    const name = `ocean-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.png`;
+    canvas.toBlob(blob => {
+      if (blob) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      }
+      document.body.classList.remove('shooting');
+      flashEl.style.transition = 'none';
+      flashEl.style.opacity = '0.7';
+      requestAnimationFrame(() => { flashEl.style.transition = ''; flashEl.style.opacity = '0'; });
+    }, 'image/png');
+  }
+  document.getElementById('photo').addEventListener('click', e => { e.stopPropagation(); takePhoto(); });
+
+  // ---------- boats and seagulls ----------
+  // a sloop a kilometre or two out and a container ship further off, both cruising past;
+  // when one wanders too far it is replaced by another somewhere ahead of you
+  const boats = [
+    { x: 0, z: 0, hd: 0, speed: 3.5, dist: 700 },
+    { x: 0, z: 0, hd: 0, speed: 7, dist: 2600 },
+  ];
+  function placeBoat(b) {
+    let a, d;
+    for (let tries = 0; tries < 8; tries++) { // somewhere ahead, clear of the island
+      a = yaw + (Math.random() - 0.5) * 1.3;
+      d = b.dist * (0.8 + Math.random() * 0.5);
+      b.x = pos.x + Math.sin(a) * d;
+      b.z = pos.z + Math.cos(a) * d;
+      if (Math.hypot(b.x - -500, b.z - 1500) > 750) break;
+    }
+    b.hd = a + Math.PI / 2 + (Math.random() - 0.5) * 1.2 + (Math.random() < 0.5 ? Math.PI : 0); // mostly crossing
+  }
+  boats.forEach(placeBoat);
+  // a loose flock circling ahead, slowly following wherever you look
+  const birds = Array.from({ length: 6 }, () => ({
+    a: Math.random() * 6.28, r: 20 + Math.random() * 55, h: 14 + Math.random() * 28,
+    w: (0.12 + Math.random() * 0.15) * (Math.random() < 0.5 ? -1 : 1), ph: Math.random() * 20,
+  }));
+  const birdBuf = new Float32Array(24);
+  let flockX = 0, flockZ = 80, boatAmt = 0, birdAmt = 0;
+
+  // ---------- sound: all synthesized, no audio files ----------
+  const soundBtn = document.getElementById('sound');
+  const audio = { ctx: null };
+  function startAudio() {
+    if (S.muted) return;
+    if (audio.ctx) { if (audio.ctx.state === 'suspended') audio.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const master = ctx.createGain();
+    master.gain.value = 0;
+    const muffle = ctx.createBiquadFilter(); // everything sounds dull and distant underwater
+    muffle.type = 'lowpass';
+    muffle.frequency.value = 20000;
+    master.connect(muffle);
+    muffle.connect(ctx.destination);
+    audio.muffle = muffle;
+    // four seconds of white noise: the raw material for surf, wind, rain and thunder
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const layer = (rate, type, freq, q) => {
+      const s = ctx.createBufferSource();
+      s.buffer = buf; s.loop = true; s.playbackRate.value = rate;
+      const f = ctx.createBiquadFilter();
+      f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      s.connect(f); f.connect(g); g.connect(master);
+      s.start();
+      return { f, g };
+    };
+    Object.assign(audio, {
+      ctx, master, buf,
+      surf: layer(1, 'lowpass', 400, 0.7),      // deep roll of the swell
+      hiss: layer(0.8, 'bandpass', 2500, 0.6),  // fizz of breaking crests
+      wind: layer(1.3, 'bandpass', 500, 1.5),
+      rain: layer(1, 'highpass', 2200, 0.5),
+    });
+  }
+  function updateAudio(t, dt) {
+    if (!audio.ctx) return;
+    const now = audio.ctx.currentTime, k = 0.3;
+    audio.master.gain.setTargetAtTime(S.muted ? 0 : C.volume, now, 0.4);
+    audio.muffle.frequency.setTargetAtTime(underwater ? 380 : 20000, now, 0.15);
+    const near = Math.max(0.15, 1 - (pos.y - 2) / 60);            // the sea fades as you climb
+    const sea = 0.3 + 0.7 * smooth(3, 22, C.windSpeed);
+    const swell = 0.55 + 0.45 * Math.sin(t * 0.7) * Math.sin(t * 0.23 + 1.3);
+    audio.surf.g.gain.setTargetAtTime(0.55 * sea * swell * near, now, k);
+    audio.surf.f.frequency.setTargetAtTime(220 + 380 * swell * sea, now, k);
+    audio.hiss.g.gain.setTargetAtTime(0.05 * sea * Math.max(0, swell - 0.35) * near * (0.4 + C.foam * 0.5), now, k);
+    const w = smooth(4, 24, C.windSpeed);
+    const gust = 0.65 + 0.35 * Math.sin(t * 1.3) * Math.sin(t * 0.37 + 2.0);
+    audio.wind.g.gain.setTargetAtTime(0.4 * w * w * gust, now, k);
+    audio.wind.f.frequency.setTargetAtTime(280 + 750 * w * gust, now, k);
+    audio.rain.g.gain.setTargetAtTime(0.22 * Math.min(1, C.rain + C.hail * 1.3 + C.snow * 0.08), now, k);
+    // gulls call now and then while they are around
+    if (birdAmt > 0.3 && (gullTimer -= dt) <= 0) {
+      gullTimer = 5 + Math.random() * 14;
+      gullCall(birdAmt);
+    }
+  }
+  let gullTimer = 3;
+  function gullCall(level) {
+    const ctx = audio.ctx;
+    let t0 = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.05 * level;
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (pan) { pan.pan.value = Math.random() * 1.6 - 0.8; out.connect(pan); pan.connect(audio.master); }
+    else out.connect(audio.master);
+    const n = 2 + Math.floor(Math.random() * 4);
+    const f0 = 1150 + Math.random() * 400;
+    for (let i = 0; i < n; i++) {
+      // "kyow": a quick rise then a falling, nasal glide
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0 * 0.7, t0);
+      o.frequency.linearRampToValueAtTime(f0, t0 + 0.05);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.55, t0 + 0.3);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 1900; bp.Q.value = 2.2;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(1, t0 + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.32);
+      o.connect(bp); bp.connect(g); g.connect(out);
+      o.start(t0); o.stop(t0 + 0.35);
+      t0 += 0.2 + Math.random() * 0.18;
+    }
+  }
+  // thunder rolls in after the flash: a sharp crack for close strikes, then a long rumble
+  function thunder(dist, power) {
+    if (!audio.ctx) return;
+    const ctx = audio.ctx;
+    const t0 = ctx.currentTime + dist / 900;
+    const s = ctx.createBufferSource();
+    s.buffer = audio.buf; s.loop = true; s.playbackRate.value = 0.45;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(dist < 4000 ? 1400 : 500, t0);
+    f.frequency.exponentialRampToValueAtTime(110, t0 + 1.8);
+    const g = ctx.createGain();
+    const v = Math.min(1.2, power * 3500 / dist);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v, t0 + 0.06);
+    g.gain.setTargetAtTime(v * 0.45, t0 + 0.15, 0.4);
+    g.gain.setTargetAtTime(0.0001, t0 + 1.4, 1.3);
+    s.connect(f); f.connect(g); g.connect(audio.master);
+    s.start(t0); s.stop(t0 + 8);
+  }
+  function markSound() { soundBtn.textContent = S.muted ? '🔇' : '🔊'; }
+  function toggleSound() {
+    S.muted = !S.muted;
+    save();
+    markSound();
+    if (!S.muted) startAudio();
+  }
+  markSound();
+  soundBtn.addEventListener('click', e => { e.stopPropagation(); toggleSound(); });
+  // browsers only allow sound after you interact with the page
+  for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, startAudio, { passive: true });
+
+  const start = performance.now();
+  let last = start;
+  let cloudT = 0;
+  function frame(now) {
+    const rawDt = (now - last) / 1000;
+    const dt = Math.min(rawDt, 0.1);
+    last = now;
+    if (rawDt < 1) adaptResolution(rawDt); // ignore pauses (hidden tab)
+    yaw += (tYaw - yaw) * 0.08;
+    pitch += (tPitch - pitch) * 0.08;
+
+    // ease the scene toward the chosen settings
+    for (const k in DEFAULTS) {
+      if (k === 'windDir') { C[k] = S[k]; continue; }
+      let diff = S[k] - C[k];
+      if (k === 'sunAzim') diff = ((diff % 360) + 540) % 360 - 180; // shortest way round
+      C[k] += diff * (1 - Math.exp(-dt * rate[k]));
+    }
+
+    // waves: stronger wind -> more energy in longer, taller waves
+    const amp = 0.1 * Math.pow(C.windSpeed / 5, 2);
+    const kPeak = 9.5 / (C.windSpeed * C.windSpeed);
+    const minY = 0.6 + amp * 2.2;
+
+    const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+    const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    const up = (keys.has('KeyE') || keys.has('Space') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
+    const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 18 : 5;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);   // horizontal forward
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);  // horizontal right
+    const ease = 1 - Math.exp(-dt * 4);
+    vel.x += ((fx * fwd + rx * side) * speed - vel.x) * ease;
+    vel.z += ((fz * fwd + rz * side) * speed - vel.z) * ease;
+    vel.y += (up * speed * 0.6 - vel.y) * ease;
+    pos.x += vel.x * dt;
+    pos.z += vel.z * dt;
+    pos.y += vel.y * dt + wheelLift * ease;
+    wheelLift -= wheelLift * ease;
+    // the surface is a one-way door: pass straight through the wave band, stop above the sand
+    const below = 0.5 + amp * 1.6;
+    if (pos.y < minY && pos.y > -below) pos.y = vel.y < 0 ? -below : minY;
+    // dive no deeper than the sand (the shader keeps the bottom at least 2.5 m below you)
+    pos.y = Math.max(-Math.max(floorDepthJS(pos.x, pos.z) * C.depth - 0.6, below + 0.5), Math.min(MAX_Y, pos.y));
+    const ground = isleHeightJS(pos.x, pos.z);
+    if (ground > -1) pos.y = Math.max(pos.y, ground + 3);
+    underwater = pos.y < 0;
+
+    // lightning strikes
+    if (C.lightning > 0.02 && strikeT < 0) {
+      nextStrike -= dt * C.lightning;
+      if (nextStrike <= 0) {
+        strikeT = 0;
+        nextStrike = 3 + Math.random() * 9;
+        const az = yaw + (Math.random() - 0.5) * 1.8;
+        const d = 2500 + Math.random() * 5000;
+        bolt.x = pos.x + Math.sin(az) * d;
+        bolt.z = pos.z + Math.cos(az) * d;
+        bolt.vis = Math.random() < 0.75 ? 1 : 0; // some strikes stay hidden in the clouds
+        bolt.seed = Math.random() * 100;
+        bolt.power = 0.6 + Math.random() * 0.6;
+        thunder(d, bolt.power);
+      }
+    }
+    let flash = 0;
+    if (strikeT >= 0) {
+      for (const [t0, a] of PULSES) if (strikeT >= t0) flash += a * Math.exp(-(strikeT - t0) * 18);
+      flash *= bolt.power;
+      strikeT += dt;
+      if (strikeT > 1.2) strikeT = -1;
+    }
+
+    // weather: fog/rain haze/spray density and how much the clouds darken everything
+    const fogRho = C.fog * C.fog * 0.03 + C.rain * 0.004 + smooth(10, 20, C.windSpeed) * 0.0015
+                 + smooth(18, 25, C.windSpeed) * 0.004 + C.snow * 0.007 + C.hail * 0.003 + C.dust * C.dust * 0.028;
+    const gloom = Math.min(0.92, smooth(0.55, 1, C.clouds) * 0.5 + C.rain * 0.3 + C.lightning * 0.15 + C.fog * 0.15
+                 + C.snow * 0.2 + C.hail * 0.25 + C.dust * 0.35);
+    // blowing dust, spindrift in a blizzard, spume in a hurricane, wisps of fog
+    const veil = Math.min(1, C.dust * 0.75 + C.snow * smooth(8, 16, C.windSpeed) * 0.6
+                 + smooth(17, 25, C.windSpeed) * 0.45 + C.fog * 0.2);
+    const wr = C.windDir * Math.PI / 180;
+    windOff.x = (windOff.x + Math.cos(wr) * C.windSpeed * dt) % 20000;
+    windOff.z = (windOff.z + Math.sin(wr) * C.windSpeed * dt) % 20000;
+
+    // a rainbow shows up while the air is still wet and the sun comes out
+    wet = Math.max(C.rain + C.hail * 0.5, wet * Math.exp(-dt / 45));
+    const bow = smooth(0.03, 0.2, wet) * (1 - smooth(0.4, 0.9, C.rain)) * (1 - smooth(0.25, 0.7, gloom))
+              * (1 - C.snow) * (1 - C.dust) * smooth(0, 4, C.sunElev);
+
+    // the waterspout forms ahead of you, lowers slowly from the cloud, then drifts downwind
+    if (C.spout > 0.01) {
+      if (!spout.placed) {
+        spout.placed = true;
+        spout.x = pos.x + Math.sin(yaw + 0.2) * 3200;
+        spout.z = pos.z + Math.cos(yaw + 0.2) * 3200;
+      }
+      spout.x += Math.cos(wr) * 3 * dt;
+      spout.z += Math.sin(wr) * 3 * dt;
+    } else spout.placed = false;
+    spout.grow += Math.max(-0.2 * dt, Math.min(0.07 * dt, C.spout - spout.grow));
+
+    if (S.auto && (autoTimer -= dt) <= 0) { autoTimer = AUTO_EVERY; autoStep(); }
+    if (real.on && (real.timer -= dt) <= 0) { real.timer = 20; updateRealSky(); }
+
+    // boats stay in port in a gale; gulls only fly in daylight and decent weather
+    boatAmt = C.life * (1 - smooth(15, 21, C.windSpeed));
+    birdAmt = C.life * smooth(0, 8, C.sunElev) * (1 - smooth(0.25, 0.6, C.rain + C.snow + C.hail + C.dust))
+            * (1 - smooth(13, 19, C.windSpeed)) * (1 - C.fog * 0.7);
+    for (const b of boats) {
+      b.x += Math.cos(b.hd) * b.speed * dt;
+      b.z += Math.sin(b.hd) * b.speed * dt;
+      const d = Math.hypot(b.x - pos.x, b.z - pos.z);
+      if (d > b.dist * 2.5 || d < 200 || Math.hypot(b.x + 500, b.z - 1500) < 650) placeBoat(b);
+    }
+    const fe = 1 - Math.exp(-dt * 0.15);
+    flockX += (pos.x + Math.sin(yaw) * 90 - flockX) * fe;
+    flockZ += (pos.z + Math.cos(yaw) * 90 - flockZ) * fe;
+    birds.forEach((b, i) => {
+      b.a += b.w * dt;
+      b.ph += dt;
+      // bursts of flapping between long glides
+      const flap = (b.ph * 0.22) % 1 < 0.35 ? Math.sin(b.ph * 9) * 0.8 + 0.2 : 0.28 + 0.05 * Math.sin(b.ph * 2);
+      birdBuf.set([flockX + Math.cos(b.a) * b.r, b.h + Math.sin(b.ph * 0.4) * 4, flockZ + Math.sin(b.a) * b.r, flap], i * 4);
+    });
+    updateAudio((now - start) / 1000, dt);
+
+    cloudT += dt * C.cloudSpeed;
+    const el = C.sunElev * Math.PI / 180, az = C.sunAzim * Math.PI / 180;
+
+    const setCommon = U => {
+      gl.uniform2f(U.uRes, canvas.width, canvas.height);
+      gl.uniform1f(U.uTime, (now - start) / 1000);
+      gl.uniform2f(U.uLook, yaw, pitch);
+      gl.uniform3f(U.uPos, pos.x, pos.y, pos.z);
+      gl.uniform3f(U.uSun, Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+      gl.uniform4f(U.uWave, amp, kPeak, C.windDir * Math.PI / 180, C.choppy);
+      gl.uniform4f(U.uWater, C.foam, C.murk, C.depth, C.windSpeed);
+      gl.uniform3f(U.uSky, C.clouds, cloudT, C.exposure);
+      gl.uniform4f(U.uWeather, C.rain, fogRho, gloom, flash);
+      gl.uniform4f(U.uBolt, bolt.x, bolt.z, bolt.vis, bolt.seed);
+      gl.uniform4f(U.uPrecip, C.snow, C.hail, C.dust, bow);
+      gl.uniform4f(U.uSpout, spout.x, spout.z, spout.grow, 0);
+      gl.uniform4f(U.uWind, windOff.x, windOff.z, veil, 0);
+      gl.uniform4f(U.uNight, C.aurora, C.glow, C.meteors, 0);
+      gl.uniform4f(U.uStars, C.moon, C.stars, C.planes, C.sats);
+      gl.uniform1i(U.uTex, 0);
+      gl.uniform4f(U.uBoatA, boats[0].x, boats[0].z, boats[0].hd, 0);
+      gl.uniform4f(U.uBoatB, boats[1].x, boats[1].z, boats[1].hd, 1);
+      gl.uniform4fv(U.uBirds, birdBuf);
+      gl.uniform2f(U.uLife, boatAmt, birdAmt);
+      gl.uniform4f(U.uMoon, real.moon[0], real.moon[1], real.moon[2], real.on ? 1 : 0);
+      gl.uniform3f(U.uMoonSun, real.sun[0], real.sun[1], real.sun[2]);
+      gl.uniformMatrix3fv(U.uSkyRot, false, real.on ? real.skyRot : DEFAULT_SKY);
+    };
+    gl.activeTexture(gl.TEXTURE0);
+
+    // a photo is rendered at full resolution, with the clouds settled over many passes
+    const shooting = photoPending;
+    let oldScale = renderScale;
+    if (shooting) { renderScale = 1; resize(); }
+
+    // pass 1: clouds at half resolution, blended into last frame's clouds
+    gl.useProgram(cloudProg.p);
+    setCommon(cloudProg.loc);
+    gl.uniform2f(cloudProg.loc.uCloudRes, cloudW, cloudH);
+    for (let i = 0; i < (shooting ? 24 : 1); i++) {
+      if (i > 0) { cur = 1 - cur; histOk = true; frameNo++; }
+      gl.uniform4f(cloudProg.loc.uCloudView, i > 0 ? yaw : prevLook[0], i > 0 ? pitch : prevLook[1], frameNo % 997, histOk ? 1 : 0);
+      gl.bindTexture(gl.TEXTURE_2D, targets[1 - cur].tex);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targets[cur].fb);
+      gl.viewport(0, 0, cloudW, cloudH);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    // pass 2: the full scene, reading this frame's clouds
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(mainProg.p);
+    setCommon(mainProg.loc);
+    gl.bindTexture(gl.TEXTURE_2D, targets[cur].tex);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (shooting) {
+      photoPending = false;
+      savePhoto();
+      renderScale = oldScale;
+      resize();
+    }
+    cur = 1 - cur;
+    histOk = true;
+    prevLook = [yaw, pitch];
+    frameNo++;
+
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+      fpsEl.textContent = Math.round(fpsFrames / fpsTime) + ' fps · ' + Math.round(renderScale * 100) + '%';
+      fpsFrames = 0; fpsTime = 0;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
