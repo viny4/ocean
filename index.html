@@ -2747,8 +2747,36 @@ void main() {
 <script>
 (() => {
   const canvas = document.getElementById('c');
-  const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
-  if (!gl) { document.body.textContent = 'WebGL is not available in this browser.'; return; }
+  // when 3D graphics can't start (or crash for good), say why and how to get them back
+  function noWebGL(lost) {
+    document.body.innerHTML = `<div style="max-width:560px;margin:12vh auto;padding:0 20px;font:16px/1.55 -apple-system,system-ui,sans-serif;color:#dfe9f2">
+      <h1 style="font-size:24px;margin:0 0 12px">🌊 ${lost ? 'The graphics card stopped responding' : 'This browser blocked 3D graphics (WebGL)'}</h1>
+      <p style="margin:0 0 14px;color:#a9bccd">The ocean needs WebGL. Usually one of these brings it back:</p>
+      <ol style="padding-left:20px;margin:0">
+        <li><b>Quit the browser completely and open it again.</b> After a graphics crash, Chrome turns WebGL off for the site until it restarts.</li>
+        <li>Turn on hardware acceleration: in Chrome, Settings → System → "Use graphics acceleration when available".</li>
+        <li>Open <code>chrome://gpu</code> and check that WebGL says "Hardware accelerated".</li>
+        <li>Editor previews (like the one inside VS Code) can't run it: open the page in Chrome, Safari, Edge or Firefox.</li>
+      </ol>
+      <p style="margin:18px 0 0"><button onclick="location.reload()" style="font:inherit;padding:8px 16px;border-radius:8px;border:0;background:#2b6f9e;color:#fff;cursor:pointer">Try again</button></p></div>`;
+    document.body.style.cssText = 'background:#08131d;overflow:auto';
+  }
+  const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true })
+          || canvas.getContext('webgl', { antialias: false })
+          || canvas.getContext('experimental-webgl', { antialias: false });
+  if (!gl) { noWebGL(false); return; }
+  // if the GPU resets mid-flight, come back at Low quality rather than freeze; give up after a few tries
+  canvas.addEventListener('webglcontextlost', e => {
+    e.preventDefault();
+    let tries = 0;
+    try { tries = +sessionStorage.getItem('ocean-gl-lost') || 0; sessionStorage.setItem('ocean-gl-lost', tries + 1); } catch (_) {}
+    try {
+      const saved = JSON.parse(localStorage.getItem('ocean-settings-v1') || '{}');
+      saved.quality = 'low';
+      localStorage.setItem('ocean-settings-v1', JSON.stringify(saved));
+    } catch (_) {}
+    if (tries < 2) setTimeout(() => location.reload(), 400); else noWebGL(true);
+  });
 
   function compile(type, src) {
     const s = gl.createShader(type);
