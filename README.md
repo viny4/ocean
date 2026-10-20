@@ -12,7 +12,7 @@ A real-time ocean you can sail, fly over and dive into, right in the browser. Ev
 |:---:|:---:|
 | ![A sunny day with clear turquoise water](docs/sunny.jpg) | ![A storm at sea with rain and a lightning strike](docs/storm.jpg) |
 | Sunny day | Storm with lightning |
-| ![A starry night with the Milky Way and a half moon](docs/night-sky.jpg) | ![Underwater, with fish over a sandy seafloor](docs/underwater.jpg) |
+| ![A starry night with the Milky Way and a half moon](docs/night-sky.jpg) | ![Underwater: kelp, coral, a sea turtle and fish](docs/underwater.jpg) |
 | Night sky | Underwater |
 | ![The lighthouse island at twilight with its beams sweeping](docs/lighthouse.jpg) | |
 | Lighthouse at twilight | |
