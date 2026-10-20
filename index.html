@@ -2535,7 +2535,6 @@ void main() {
     return Math.max(-1, Math.min(1, (dx * Math.cos(yaw) - dz * Math.sin(yaw)) / d));
   }
   function setPan(node, v, now) { if (node.pan) node.pan.setTargetAtTime(v, now, 0.1); }
-  const LIGHT = { x: -418, z: 1253 };
   const snd = {
     shoreT: 2, hornT: 8, creakT: 6, bubbleT: 1, bubbles: 0, creaking: false,
     gust: 0.5, gustTo: 0.5, gustT: 0, wasUnder: false, mutedFor: 0,
