@@ -1142,23 +1142,103 @@ vec3 underwaterView(vec3 ro, vec3 rd, float t) {
 const vec3 ISLE = vec3(-500.0, 0.0, 1500.0);
 const float ISLE_R = 420.0, ISLE_H = 95.0;
 const vec2 LIGHT_XZ = vec2(-418.0, 1253.0);   // on the shore facing the open sea
+const vec2 BEACH_DIR = vec2(0.906, -0.423);   // the sandy cove on the south-east shore
+const vec3 JETTY = vec3(-192.0, 1356.0, 1.9); // landward end of the jetty, deck height
+const float JETTY_L = 72.0;                    // it runs straight out along BEACH_DIR
 
-float isleHeight(vec2 p) {
+// how far inland of the ragged coastline a point is (m, negative offshore), and how much
+// of the beach it is on
+vec2 isleCoast(vec2 p) {
   float n = noise(p * 0.004 + 3.0) * 0.65 + noise(p * 0.011 + 7.0) * 0.35;
-  float r = length(p - ISLE.xz) / ISLE_R + (n - 0.5) * 0.5;    // ragged coastline
+  vec2 d = p - ISLE.xz;
+  float r = length(d) / ISLE_R + (n - 0.5) * 0.5;
+  return vec2((1.0 - r) * ISLE_R, smoothstep(0.80, 0.95, dot(d, BEACH_DIR) / max(length(d), 1.0)));
+}
+float isleHeight(vec2 p) {
+  vec2 c = isleCoast(p);
   float m = noise(p * 0.007 + 13.0);
-  float k = max(1.0 - r, 0.0);
+  float k = max(c.x / ISLE_R, 0.0);
   float h = ISLE_H * pow(k, 1.25) * (0.55 + 0.9 * m);
   h += 14.0 * smoothstep(0.0, 0.08, k);                                 // sea cliffs ringing the coast
   float ridges = 1.0 - abs(noise(p * 0.022 + 5.0) * 2.0 - 1.0);         // sharp ridges and gullies
   h += (ridges * 16.0 + noise(p * 0.06 + 2.0) * 5.0) * smoothstep(0.02, 0.25, k);
-  return h - 4.0 - 10.0 * (1.0 - smoothstep(0.0, 0.02, k));
+  h -= 4.0 + 10.0 * (1.0 - smoothstep(0.0, 0.02, k));
+  // in the cove the cliffs give way to a gently shelving beach that runs on under the sea
+  float sand = clamp(c.x * 0.045 - 0.8, -6.0, 4.0);
+  return mix(h, mix(sand, h, smoothstep(70.0, 260.0, c.x)), c.y);
 }
 float isleDetail(vec2 p) {
   float h = isleHeight(p);
   return h + (fbm(p * 0.08) - 0.5) * 4.0 * smoothstep(0.0, 10.0, h);  // rocks and gullies
 }
 float lighthouseBase() { return max(isleHeight(LIGHT_XZ), 4.0); }
+
+// the light to cast shadows from: the sun by day, the moon by night
+vec3 shadowLight() { return SUN.y > 0.0 ? SUN : MOON; }
+
+// soft shadow of the island's hills: a few growing steps toward the light (1 = fully shaded)
+float isleShadow(vec3 p, vec3 L) {
+  if (L.y < 0.01) return 0.0;
+  float res = 1.0, s = 1.5;
+  for (int i = 0; i < 14; i++) {
+    vec3 q = p + L * s;
+    if (q.y > 175.0) break;                                   // above the highest peak
+    res = min(res, 10.0 * (q.y - isleHeight(q.xz)) / s);
+    if (res < 0.0) break;
+    s += max(3.0, s * 0.4);
+  }
+  return 1.0 - smoothstep(0.0, 1.0, res);
+}
+
+// shadow of the lighthouse tower: the closest pass of the light ray by its axis
+float lighthouseShadow(vec3 p, vec3 L, float hb) {
+  if (L.y < 0.01) return 0.0;
+  vec2 v = LIGHT_XZ - p.xz;
+  float s = dot(v, L.xz) / max(dot(L.xz, L.xz), 1e-4);
+  if (s <= 0.0) return 0.0;
+  float y = p.y + L.y * s - hb;
+  float R = y < 26.0 ? 4.2 - y * 0.06 : 2.7;
+  return (1.0 - smoothstep(-0.6, 0.6, length(v - L.xz * s) - R)) * step(-2.0, y) * (1.0 - smoothstep(34.0, 36.0, y));
+}
+
+// the jetty in its own frame: x out along the jetty, y up, z across
+vec3 jettyLocal(vec3 p) {
+  vec2 d = p.xz - JETTY.xy;
+  return vec3(dot(d, BEACH_DIR), p.y, dot(d, vec2(-BEACH_DIR.y, BEACH_DIR.x)));
+}
+// planked deck on two stringers, standing on rows of posts
+float jettySDF(vec3 q) {
+  float dy = JETTY.z;
+  vec3 b = abs(q - vec3(JETTY_L * 0.5, dy - 0.06, 0.0)) - vec3(JETTY_L * 0.5, 0.06, 1.5);
+  float deck = min(max(b.x, max(b.y, b.z)), 0.0) + length(max(b, 0.0));
+  deck = max(deck, 0.012 - abs(mod(q.x, 0.3) - 0.15));                  // gaps between planks
+  vec3 sb = abs(vec3(q.x - JETTY_L * 0.5, q.y - dy + 0.28, abs(q.z) - 1.2)) - vec3(JETTY_L * 0.5, 0.16, 0.09);
+  float beam = min(max(sb.x, max(sb.y, sb.z)), 0.0) + length(max(sb, 0.0));
+  float xi = clamp(floor(q.x / 4.0 + 0.5), 0.0, JETTY_L / 4.0);
+  float top = dy + (xi > JETTY_L / 4.0 - 1.5 ? 0.9 : 0.0);              // mooring posts at the end
+  vec2 pc = vec2(q.x - xi * 4.0, abs(q.z) - 1.35);
+  float post = max(length(pc) - 0.16, max(q.y - top, -6.0 - q.y));
+  return min(min(deck, beam), post);
+}
+// how much the jetty's deck blocks the light at p (analytic slab test against the deck box)
+float jettyShadow(vec3 p, vec3 L) {
+  if (L.y < 0.01) return 0.0;
+  vec3 q = jettyLocal(p);
+  vec3 l = vec3(dot(L.xz, BEACH_DIR), L.y, dot(L.xz, vec2(-BEACH_DIR.y, BEACH_DIR.x)));
+  vec3 lo = (vec3(0.0, JETTY.z - 0.45, -1.5) - q) / l, hi = (vec3(JETTY_L, JETTY.z, 1.5) - q) / l;
+  vec3 mn = min(lo, hi), mx = max(lo, hi);
+  float t0 = max(max(mn.x, mn.y), mn.z), t1 = min(min(mx.x, mx.y), mx.z);
+  return t1 > max(t0, 0.0) ? 0.85 : 0.0;   // light leaks between the planks
+}
+
+// sun- or moonlight reaching a point on the island or the shallows: hills, tower, jetty, clouds
+float isleSunlight(vec3 p, float hb, bool hills) {
+  vec3 L = shadowLight();
+  float sh = hills ? isleShadow(p, L) : 0.0;
+  sh = max(sh, lighthouseShadow(p, L, hb));
+  if (length(p.xz - JETTY.xy - BEACH_DIR * JETTY_L * 0.5) < JETTY_L) sh = max(sh, jettyShadow(p, L));
+  return (1.0 - sh) * (1.0 - 0.85 * cloudShadow(p));
+}
 
 // ray-marched rocky island: cliffs, grass on the gentle slopes, a beach and a line of surf
 vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
@@ -1196,13 +1276,27 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
   vec3 grass = mix(vec3(0.24, 0.32, 0.13), vec3(0.34, 0.36, 0.18), noise(p.xz * 0.05));
   grass = mix(grass, vec3(0.09, 0.17, 0.07), smoothstep(0.45, 0.7, noise(p.xz * 0.04 + 9.0)) * 0.85); // stands of trees
   vec3 alb = mix(rock, grass, smoothstep(0.78, 0.9, n.y));
-  alb = mix(vec3(0.82, 0.76, 0.6), alb, smoothstep(1.0, 4.0, p.y));      // beach
+  float cove = isleCoast(p.xz).y;
+  // sand in the cove (up into the dunes), a strip of shingle under the cliffs elsewhere
+  vec3 sandCol = vec3(0.84, 0.77, 0.6) * (0.9 + 0.2 * noise(p.xz * 0.7));
+  alb = mix(sandCol, alb, smoothstep(mix(1.0, 5.0, cove), mix(4.0, 9.0, cove), p.y));
   alb = mix(alb, vec3(0.88, 0.91, 0.95), uClimate.y * smoothstep(0.55, 0.8, n.y) * smoothstep(2.0, 8.0, p.y)); // polar snow
-  vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) + SUN_COL * max(dot(n, SUN), 0.0) * 0.95
-                    + MOON_COL * max(dot(n, MOON), 0.0) * 0.6);
-  // surf breaking along the shore
-  float surf = (1.0 - smoothstep(0.0, 1.2, p.y)) * (0.6 + 0.4 * sin(uTime * 1.3 + p.x * 0.05 + p.z * 0.03));
-  col = mix(col, vec3(0.92) * (SKY_AMB * 0.6 + SUN_COL * 0.6), surf * 0.8);
+  // the swash runs up the sand with each breaker and leaves it dark and glossy as it drains
+  float run = pow(0.5 + 0.5 * sin(uTime * 1.1 - 1.4 + noise(p.xz * 0.02) * 3.0), 3.0);
+  float swashY = 0.15 + 0.6 * run * cove;
+  float wet = 1.0 - smoothstep(swashY + 0.1, swashY + 0.7 + 0.4 * cove, p.y);
+  alb *= 1.0 - 0.45 * wet;
+  float lit = isleSunlight(vec3(p.x, max(p.y, isleHeight(p.xz)) + 0.5, p.z), lighthouseBase(), true);
+  vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) * (0.75 + 0.25 * lit)
+                    + (SUN_COL * max(dot(n, SUN), 0.0) * 0.95 + MOON_COL * max(dot(n, MOON), 0.0) * 0.6) * lit);
+  vec3 hv = normalize(SUN - rd);
+  col += SUN_COL * pow(max(dot(n, hv), 0.0), 60.0) * wet * 0.6 * lit;    // sheen on the wet sand
+  // a sheet of foam sliding up the beach, and spray bursting against the rocks
+  float tex = noise(p.xz * 0.9 + uTime * 0.3) * 0.6 + noise(p.xz * 3.1 - uTime * 0.5) * 0.4;
+  float sheet = (1.0 - smoothstep(swashY - 0.15, swashY + 0.05, p.y)) * smoothstep(0.35, 0.6, tex) * cove;
+  float spray = (1.0 - smoothstep(0.0, 1.5 + run * 1.5, p.y)) * (0.5 + 0.5 * run) * (1.0 - cove)
+              * smoothstep(0.3, 0.6, tex);
+  col = mix(col, vec3(0.92) * (SKY_AMB * 0.6 + SUN_COL * 0.6 * lit), clamp(sheet + spray, 0.0, 0.9));
   col = mix(col, haze, 1.0 - exp(-t * 0.00035));
   tI = t;
   return vec4(col, 1.0);
@@ -1229,12 +1323,50 @@ vec4 lighthouse(vec3 ro, vec3 rd, vec3 haze, float hb, out float tL) {
   float lam = max(dot(nrm, SUN.xz) + SUN.y * 0.3, 0.0);
   vec3 alb = step(0.5, fract(y / 6.5)) > 0.5 ? vec3(0.75, 0.12, 0.1) : vec3(0.92, 0.92, 0.9);
   if (y > 25.0 && y < 26.0) alb = vec3(0.1);                          // gallery rail
+  lam *= 1.0 - 0.85 * cloudShadow(ro + rd * t);
   vec3 col = alb * (SKY_AMB * 0.5 + SUN_COL * lam * 0.9);
   if (y >= 26.0 && y < 31.0) col = mix(vec3(0.15, 0.18, 0.2) * SKY_AMB, vec3(1.0, 0.85, 0.5) * 2.5, 1.0 - DAY); // lantern
   if (y >= 31.0) col = vec3(0.06) * (SKY_AMB + SUN_COL * lam);
   col = mix(col, haze, 1.0 - exp(-t * 0.00035));
   tL = t;
   return vec4(col, cov);
+}
+
+// the wooden jetty: sphere-traced only where the ray crosses its bounding box
+vec4 jetty(vec3 ro, vec3 rd, vec3 haze, out float tJ) {
+  tJ = 1e5;
+  vec3 q0 = jettyLocal(ro);
+  vec3 rl = vec3(dot(rd.xz, BEACH_DIR), rd.y, dot(rd.xz, vec2(-BEACH_DIR.y, BEACH_DIR.x)));
+  vec3 lo = (vec3(-0.5, -1.0, -1.8) - q0) / rl, hi = (vec3(JETTY_L + 0.5, JETTY.z + 1.0, 1.8) - q0) / rl;
+  vec3 mn = min(lo, hi), mx = max(lo, hi);
+  float t0 = max(max(max(mn.x, mn.y), mn.z), 0.0), t1 = min(min(mx.x, mx.y), mx.z);
+  if (t1 <= t0 || t0 > 3000.0) return vec4(0.0);
+  float t = t0;
+  bool hit = false;
+  for (int i = 0; i < 48; i++) {
+    float d = jettySDF(q0 + rl * t);
+    if (d < max(0.003, t * PX * 0.7)) { hit = true; break; }
+    t += d;
+    if (t > t1) break;
+  }
+  if (!hit) return vec4(0.0);
+  vec3 q = q0 + rl * t;
+  vec2 e = vec2(0.01, -0.01);
+  vec3 nl = normalize(e.xyy * jettySDF(q + e.xyy) + e.yyx * jettySDF(q + e.yyx)
+                    + e.yxy * jettySDF(q + e.yxy) + e.xxx * jettySDF(q + e.xxx));
+  vec3 n = vec3(nl.x * BEACH_DIR.x - nl.z * BEACH_DIR.y, nl.y, nl.x * BEACH_DIR.y + nl.z * BEACH_DIR.x);
+  vec3 p = ro + rd * t;
+  // weathered planks, each a slightly different grey-brown; posts stained dark by the tide
+  float plank = hash(vec2(floor(q.x / 0.3), 7.0));
+  vec3 alb = vec3(0.42, 0.33, 0.24) * (0.7 + 0.4 * plank) * (0.85 + 0.3 * noise(q.xz * vec2(0.8, 6.0)));
+  alb *= 1.0 - 0.55 * (1.0 - smoothstep(-0.2, 0.8, p.y));
+  float lit = isleSunlight(p + n * 0.05, lighthouseBase(), false);
+  vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) + (SUN_COL * max(dot(n, SUN), 0.0) * 0.95
+                    + MOON_COL * max(dot(n, MOON), 0.0) * 0.6) * lit);
+  if (p.y < -0.3) col = mix(col, vec3(0.0, 0.1, 0.12) * SKY_AMB, 0.6);   // seen through the water
+  col = mix(col, haze, 1.0 - exp(-t * 0.00035));
+  tJ = t;
+  return vec4(col, 1.0);
 }
 
 // two beams sweeping round from the lantern after dark, glowing where they cut through haze,
@@ -1573,12 +1705,40 @@ void main() {
       splash = clamp(rp.z * uPrecip.y * nf, 0.0, 1.0);
     }
 
+    // near the island the swell feels the bottom: it swings round to roll in square to the
+    // shore and steepens into lines of surf that run up the beach and burst under the cliffs
+    vec2 dI = p.xz - ISLE.xz;
+    float off = 1e3, ph = 0.0, sandy = 0.0;
+    if (dot(dI, dI) < 620.0 * 620.0) {
+      vec2 cst = isleCoast(p.xz);
+      sandy = cst.y;
+      off = mix(12.0, 18.0, sandy) - cst.x;                 // metres out from the waterline
+      if (off < 200.0) {
+        float near = 1.0 - smoothstep(20.0, 200.0, off);
+        ph = off * 0.25 + t * 1.1 + noise(p.xz * 0.015) * 4.0;
+        float slope = 1.5 * exp(1.5 * (sin(ph) - 1.0)) * cos(ph) * 0.25;  // d(height)/d(off)
+        vec2 g = normalize(dI) * slope * (0.25 + 0.03 * uWater.w) * near * smoothstep(-5.0, 15.0, off);
+        n = normalize(vec3(-w.y * (1.0 - 0.7 * near) - g.x, 1.0, -w.z * (1.0 - 0.7 * near) - g.y));
+        crest = max(crest * (1.0 - near), smoothstep(0.85, 1.0, sin(ph)) * near);
+      }
+    }
+    // shade cast on the water by the hills, the lighthouse and the jetty
+    float hb = lighthouseBase();
+    float isleSh = 0.0;
+    vec3 L = shadowLight();
+    vec2 Lh = normalize(L.xz + 1e-5);
+    float along = -dot(dI, Lh);                           // only where the light passes over the island
+    if (dot(dI, dI) < 900.0 * 900.0 && (dot(dI, dI) < 560.0 * 560.0 || (along > 0.0 && length(dI + Lh * along) < 560.0))) {
+      isleSh = max(isleShadow(p + vec3(0.0, 0.3, 0.0), L), lighthouseShadow(p, L, hb));
+      if (length(p.xz - JETTY.xy - BEACH_DIR * JETTY_L * 0.5) < JETTY_L) isleSh = max(isleSh, jettyShadow(p, L));
+    }
+
     // reflection
     vec3 rf = reflect(rd, n);
     rf.y = abs(rf.y);
     vec3 refl = skyReflect(p, rf);
     refl = mix(refl, fogColor(rf), fogAmount(p, rf, 1e5)); // in fog or dust the sea mirrors the murk
-    float shadow = cloudShadow(p);
+    float shadow = max(cloudShadow(p), isleSh);
     float sd = max(dot(rf, SUN), 0.0);
     float spec = (pow(sd, 900.0) * 40.0 + pow(sd, 120.0) * 1.2) * (1.0 - shadow);
 
@@ -1591,8 +1751,12 @@ void main() {
       d = floorDepth(q.xz);
       tf = d / -rr.y;
     }
+    if (off < 200.0) {                              // the island's beach shelving up under the sea
+      d = min(d, max(-isleHeight((p + rr * tf).xz), 0.05));
+      tf = d / -rr.y;
+    }
     vec3 q = p + rr * tf;
-    vec3 light = SUN_COL * 0.85 * smoothstep(-0.02, 0.4, el) + SKY_AMB * 0.2;
+    vec3 light = (SUN_COL * 0.85 * smoothstep(-0.02, 0.4, el)) * (1.0 - 0.7 * isleSh) + SKY_AMB * 0.2;
     vec3 floorCol = seaFloor(q.xz, d, dist) * light * (1.0 - 0.45 * shadow);
 
     float murk = uWater.y;
@@ -1636,14 +1800,28 @@ void main() {
       foam = max(foam, streaks * smoothstep(9.0, 16.0, uWater.w) * 0.35 * uWater.x);
     }
     foam *= 1.0 - smoothstep(60.0, 400.0, dist);
+    if (off < 200.0) {
+      // breakers: a sharp white front with a trail of foam behind, then whitewash and
+      // swash in the shallows; under the cliffs a churning band that swells with each wave
+      float sea = 0.6 + 0.4 * smoothstep(3.0, 12.0, uWater.w);
+      float st = mix(tex, noise(p.xz * 0.12 + vec2(t * 0.1, 0.0)), smoothstep(80.0, 600.0, dist));
+      float zone = mix(35.0, 170.0 * sea, sandy);
+      float u = fract((ph - 1.5708) / 6.2832);
+      float line = exp(-u * 5.0) * (1.0 - smoothstep(0.94, 1.0, u)) * (1.0 - smoothstep(zone * 0.5, zone, off));
+      line *= mix(1.0, smoothstep(0.3, 0.6, noise(p.xz * 0.025 + vec2(11.0, t * 0.04))), smoothstep(10.0, zone * 0.6, off));
+      float wash = 1.0 - smoothstep(0.0, mix(6.0, 22.0, sandy), off);
+      float band = (1.0 - sandy) * (1.0 - smoothstep(0.0, 16.0 + 10.0 * sin(ph), off + (noise(p.xz * 0.05) - 0.5) * 14.0));
+      float sf = max(line * smoothstep(0.35, 0.6, st), max(wash * 0.9, band) * smoothstep(0.38, 0.6, st));
+      foam = max(foam, clamp(sf * sea * 1.3, 0.0, 1.0) * (1.0 - smoothstep(2000.0, 4500.0, dist)));
+    }
     foam = max(foam, splash);
-    vec3 foamCol = vec3(0.92) * (SUN_COL * max(el, 0.0) * 1.2 + SKY_AMB * 0.55);
+    vec3 foamCol = vec3(0.92) * (SUN_COL * max(el, 0.0) * 1.2 * (1.0 - 0.7 * isleSh) + SKY_AMB * 0.55);
     col = mix(col, foamCol, foam);
     col += SUN_COL * spec * (1.0 - foam);
 
     // moonlight path on the water
     float md = max(dot(rf, MOON), 0.0);
-    col += MOON_COL * (pow(md, 1400.0) * 30.0 + pow(md, 120.0) * 0.8) * (1.0 - foam);
+    col += MOON_COL * (pow(md, 1400.0) * 30.0 + pow(md, 120.0) * 0.8) * (1.0 - foam) * (1.0 - isleSh);
 
     // polar sea: loose plates of snow-covered pack ice drifting downwind, riding the swell
     if (uClimate.y > 0.01 && dist < 1500.0) {
@@ -1677,6 +1855,9 @@ void main() {
   float tI;
   vec4 isl = island(ro, rd, horizon, tI);
   if (isl.a > 0.0 && tI < hitT) { col = isl.rgb; hitT = tI; }
+  float tJ;
+  vec4 jt = jetty(ro, rd, horizon, tJ);
+  if (jt.a > 0.0 && tJ < hitT) { col = jt.rgb; hitT = tJ; }
   float tL;
   vec4 lh = lighthouse(ro, rd, horizon, hb, tL);
   if (lh.a > 0.0 && tL < hitT) { col = mix(col, lh.rgb, lh.a); if (lh.a > 0.5) hitT = tL; }
@@ -2844,15 +3025,28 @@ void main() {
   }
   // the island's height, mirrored from the shader so you fly over it rather than through it
   const ISLE = { x: -500, z: 1500, r: 420, h: 95 };
+  const BEACH = { x: 0.906, z: -0.423 };
+  const JETTY = { x: -192, z: 1356, deck: 1.9, len: 72 };
   function isleHeightJS(x, z) {
     const n = noiseJS(x * 0.004 + 3, z * 0.004 + 3) * 0.65 + noiseJS(x * 0.011 + 7, z * 0.011 + 7) * 0.35;
-    const r = Math.hypot(x - ISLE.x, z - ISLE.z) / ISLE.r + (n - 0.5) * 0.5;
+    const dx = x - ISLE.x, dz = z - ISLE.z, dl = Math.hypot(dx, dz);
+    const r = dl / ISLE.r + (n - 0.5) * 0.5;
+    const s = (1 - r) * ISLE.r, cove = smooth(0.80, 0.95, (dx * BEACH.x + dz * BEACH.z) / Math.max(dl, 1));
     const m = noiseJS(x * 0.007 + 13, z * 0.007 + 13);
     const k = Math.max(1 - r, 0);
     let h = ISLE.h * Math.pow(k, 1.25) * (0.55 + 0.9 * m) + 14 * smooth(0, 0.08, k);
     const ridges = 1 - Math.abs(noiseJS(x * 0.022 + 5, z * 0.022 + 5) * 2 - 1);
     h += (ridges * 16 + noiseJS(x * 0.06 + 2, z * 0.06 + 2) * 5) * smooth(0.02, 0.25, k);
-    return h - 4 - 10 * (1 - smooth(0, 0.02, k));
+    h -= 4 + 10 * (1 - smooth(0, 0.02, k));
+    const sand = Math.max(-6, Math.min(4, s * 0.045 - 0.8));
+    const mix = (a, b, f) => a + (b - a) * f;
+    return mix(h, mix(sand, h, smooth(70, 260, s)), cove);
+  }
+  // standing on the jetty's deck: its top, or -Infinity off it
+  function jettyTopJS(x, z) {
+    const dx = x - JETTY.x, dz = z - JETTY.z;
+    const along = dx * BEACH.x + dz * BEACH.z, across = -dx * BEACH.z + dz * BEACH.x;
+    return along > -0.5 && along < JETTY.len + 0.5 && Math.abs(across) < 1.6 ? JETTY.deck : -Infinity;
   }
   function floorDepthJS(x, z) {
     const n = fbmJS(x * 0.03 + 7, z * 0.03 + 7);
@@ -3409,8 +3603,11 @@ void main() {
     if (pos.y < minY && pos.y > -below) pos.y = vel.y < 0 ? -below : minY;
     // dive no deeper than the sand (the shader keeps the bottom at least 2.5 m below you)
     pos.y = Math.max(-Math.max(floorDepthJS(pos.x, pos.z) * C.depth - 0.6, below + 0.5), Math.min(MAX_Y, pos.y));
+    // eye height over the sand and the jetty, a little more over the rocky ground
     const ground = isleHeightJS(pos.x, pos.z);
-    if (ground > -1) pos.y = Math.max(pos.y, ground + 3);
+    if (ground > -1) pos.y = Math.max(pos.y, ground + 1.7 + 1.3 * smooth(2, 10, ground));
+    const deck = jettyTopJS(pos.x, pos.z);
+    if (pos.y > deck - 0.6) pos.y = Math.max(pos.y, deck + 1.7);
     underwater = pos.y < 0;
 
     // lightning strikes
