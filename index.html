@@ -1027,7 +1027,8 @@ float isleDetail(vec2 p) {
 float lighthouseBase() { return max(isleHeight(LIGHT_XZ), 4.0); }
 
 // ray-marched rocky island: cliffs, grass on the gentle slopes, a beach and a line of surf
-vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
+// (steps: 64 seen directly, fewer for its reflection in the sea)
+vec4 island(vec3 ro, vec3 rd, vec3 haze, int steps, out float tI) {
   tI = 1e5;
   vec2 oc = ro.xz - ISLE.xz;
   float a = dot(rd.xz, rd.xz), b = dot(oc, rd.xz), c = dot(oc, oc) - ISLE_R * ISLE_R * 1.7;
@@ -1038,10 +1039,11 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
   if (rd.y > 0.0) t1 = min(t1, (ISLE_H * 2.0 - ro.y) / rd.y);
   else t1 = min(t1, (-4.0 - ro.y) / rd.y);
   if (t1 <= t0) return vec4(0.0);
-  float dt = (t1 - t0) / 64.0;
+  float dt = (t1 - t0) / float(steps);
   float t = t0, tp = t0;
   bool hit = false;
   for (int i = 0; i < 64; i++) {
+    if (i >= steps) break;
     vec3 p = ro + rd * t;
     if (p.y < isleHeight(p.xz)) { hit = true; break; }
     tp = t;
@@ -1242,6 +1244,134 @@ void gulls(vec3 ro, vec3 rd, inout vec3 col, inout float hitT) {
   }
 }
 
+// ---------- what the sea mirrors ----------
+// the island, lighthouse and boats seen along a reflected ray: a coarse march of the island
+// and the cheap cut-outs for the rest. a is how much of the sky behind they hide.
+vec4 mirrorScene(vec3 p, vec3 rf, vec3 haze, float hb) {
+  vec4 m = vec4(0.0);
+  float tM = 1e5, tH;
+  vec4 h = island(p, rf, haze, 20, tH);
+  if (h.a > 0.0) { m = h; tM = tH; }
+  h = lighthouse(p, rf, haze, hb, tH);
+  if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
+  h = boat(p, rf, uBoatA, haze, tH);
+  if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
+  h = boat(p, rf, uBoatB, haze, tH);
+  if (h.a > 0.0 && tH < tM) m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a));
+  return m;
+}
+
+// ---------- breaking waves ----------
+// The sea is cut into cells, wider across the wind like the crests. Now and then a cell's
+// crest spills over: a burst of whitecap that runs on with the wave and curls over at its
+// leading edge, then spreads and frays into a fading patch of foam. The harder it blows,
+// the bigger the cells and the more of them break.
+// Returns (fresh whitecap, old foam, shadow under the curling lip); grow widens the blobs.
+vec3 breakers(vec2 p, float t, float tex, float grow) {
+  float rate = smoothstep(3.5, 20.0, uWater.w) * min(uWater.x, 1.3); // share of cells breaking
+  if (rate < 0.01) return vec3(0.0);
+  vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+  vec2 q = vec2(dot(p, wd), dot(p, vec2(-wd.y, wd.x)));   // along / across the wind
+  vec2 sz = clamp(2.0 / uWave.y, 6.0, 40.0) * vec2(1.0, 1.6);
+  float run = sqrt(9.8 / uWave.y) * 0.3;                   // how fast the broken crest runs on
+  vec3 res = vec3(0.0);
+  for (int l = 0; l < 3; l++) {
+    float fl = float(l);
+    vec2 g = q / sz + fl * vec2(0.37, 0.61);
+    vec2 c = floor(g) + fl * 31.0;
+    float h1 = hash(c), h2 = hash(c + 2.3), h3 = hash(c + 4.1);
+    float T = 4.5 + 5.0 * h2;                               // seconds between breaks here
+    float ph = t / T + h1;
+    float age = fract(ph);
+    if (hash(c + floor(ph) * 1.37) > rate) continue;        // this time it didn't break
+    vec2 fg = fract(g);
+    vec2 d = (fg - vec2(0.2 + 0.15 * h3, 0.3 + 0.4 * h2)) * sz;
+    d.x -= min(age * T, 2.5) * run;
+    vec2 r = sz * vec2(0.16, 0.19) * (0.45 + 0.75 * sqrt(age)) * (0.7 + 0.5 * h3) * grow;
+    vec2 e = d / r;
+    vec2 edge = min(fg, 1.0 - fg);                          // never cut off at the cell's edge
+    float blob = smoothstep(1.0, 0.65, length(e) + (tex - 0.5) * 0.9) * smoothstep(0.0, 0.1, min(edge.x, edge.y));
+    float fresh = smoothstep(0.0, 0.02, age) * (1.0 - smoothstep(0.15, 0.45, age));
+    // the old foam frays into lace and thins out
+    float lace = smoothstep(0.32 + 0.3 * age, 0.45 + 0.3 * age, tex);
+    float old = blob * pow(1.0 - age, 1.5) * lace * 0.8;
+    float curl = smoothstep(0.75, 1.0, e.x) * smoothstep(1.4, 1.05, e.x) * smoothstep(1.0, 0.5, abs(e.y)) * fresh;
+    res = max(res, vec3(blob * fresh, old, curl));
+  }
+  return res;
+}
+
+// spindrift: in a gale the wind tears spray off the breaking crests and drives it
+// downwind in low streaming sheets. Sampled through the spray layer near the camera only.
+float spindrift(vec3 ro, vec3 rd, float tMax, float t) {
+  float gale = smoothstep(11.0, 19.0, uWater.w) * min(uWater.x, 1.5);
+  if (gale < 0.01) return 0.0;
+  float top = 1.5 + 2.5 * uWave.x;
+  float ta = 0.0, tb = 400.0;
+  if (abs(rd.y) > 1e-4) {
+    float t0 = -ro.y / rd.y, t1 = (top - ro.y) / rd.y;
+    ta = max(min(t0, t1), 0.0);
+    tb = min(max(t0, t1), tb);
+  } else if (ro.y > top) return 0.0;
+  tb = min(tb, tMax);
+  if (tb <= ta) return 0.0;
+  vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+  float acc = 0.0;
+  for (int i = 0; i < 5; i++) {
+    float f = (float(i) + 0.5) / 5.0;
+    vec3 q = ro + rd * mix(ta, tb, f * f);                  // denser close by
+    float y = clamp(q.y / top, 0.0, 1.0);
+    vec3 br = breakers(q.xz - wd * y * 14.0, t, 0.5, 1.8);  // blown downwind as it rises
+    vec2 s = vec2(dot(q.xz, wd), dot(q.xz, vec2(-wd.y, wd.x)));
+    float n = noise(vec2(s.x * 0.1 - t * uWater.w * 0.1, s.y * 0.7 + y * 2.0))
+            * (0.4 + 0.8 * noise(vec2(s.x * 0.5 - t * uWater.w * 0.5, s.y * 3.5)));  // finer wisps
+    float dens = br.x * smoothstep(0.25, 0.7, n) * 3.0 + 0.06 * smoothstep(0.5, 0.8, n);
+    acc += (1.0 - acc) * min(dens * exp(-y * 2.0) * 0.4, 0.6);
+  }
+  return acc * gale;
+}
+
+// ---------- boat wakes ----------
+// height of a boat's wake, s metres astern of the bow and ax metres off its track:
+// a crest along each arm of Kelvin's 19.5 degree wedge with diverging waves feathering
+// off it, and transverse waves across the wedge keeping pace with the boat
+float kelvin(float s, float ax, float kT, float beam) {
+  float arm = s * 0.354 + beam * 0.5;
+  float aw = 0.8 + s * 0.035;
+  float da = ax - arm;
+  float ridge = exp(-da * da / (aw * aw)) * sin(kT * 1.5 * (s - ax * 1.4));
+  float trans = cos(kT * s) * smoothstep(aw, -aw * 3.0, da) * 0.45;
+  return (ridge + trans) * smoothstep(-1.0, 2.0, s);
+}
+// returns foam; adds the wake's slope to g
+float boatWake(vec2 p, vec4 B, inout vec2 g) {
+  bool ship = B.w > 0.5;
+  float L = ship ? 80.0 : 7.0, beam = ship ? 13.0 : 1.6, U = ship ? 7.0 : 3.5;
+  float len = ship ? 1500.0 : 320.0;
+  vec2 hd = vec2(cos(B.z), sin(B.z)), sd = vec2(-hd.y, hd.x);
+  vec2 d = p - B.xy;
+  float s = L - dot(d, hd);              // metres astern of the bow
+  float x = dot(d, sd);                  // metres off the track
+  float ax = abs(x);
+  if (s < -4.0 || s > len || ax > s * 0.4 + beam + 8.0) return 0.0;
+  float fade = exp(-s / (len * 0.3)) * uLife.x;
+  float kT = 9.8 / (U * U);              // waves that travel at the boat's speed
+  float amp = (ship ? 0.35 : 0.1) * fade;
+  float e = 0.25 / kT;
+  float h0 = kelvin(s, ax, kT, beam);
+  float hs = (kelvin(s + e, ax, kT, beam) - h0) / e;
+  float hx = (kelvin(s, ax + e, kT, beam) - h0) / e * sign(x);
+  g += amp * (-hs * hd + hx * sd);
+  // white water off the bow and along the arms close astern, churned water down the middle
+  float arm = s * 0.354 + beam * 0.5;
+  float da = (ax - arm) / (0.6 + s * 0.03);
+  float armFoam = exp(-da * da) * exp(-s / (L * 4.0));
+  float cw = beam * 0.45 + (s - 2.0 * L) * 0.025;
+  float centre = exp(-x * x / (cw * cw)) * smoothstep(1.7 * L, 2.0 * L, s) * exp(-(s - 2.0 * L) / (len * 0.25));
+  float lace = noise(p * 0.7) * 0.6 + noise(p * 2.3 + 5.0) * 0.4;
+  return clamp((armFoam * 0.8 + centre) * smoothstep(0.25, 0.6, lace + 0.25 * centre), 0.0, 1.0) * fade * 1.3;
+}
+
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
@@ -1336,6 +1466,7 @@ void main() {
   vec3 col;
   vec3 boltCol = vec3(0.0);
   float hitT = 1e5;
+  float hb = lighthouseBase();
 
   if (rd.y >= -0.0005) {
     if (fogAmount(ro, rd, hitT) > 0.995) col = horizon;
@@ -1372,10 +1503,30 @@ void main() {
       splash = clamp(rp.z * uPrecip.y * nf, 0.0, 1.0);
     }
 
-    // reflection
+    // wakes trailing behind the boats
+    float wake = 0.0;
+    if (uLife.x > 0.01 && dist < 3000.0) {
+      vec2 wg = vec2(0.0);
+      wake = max(boatWake(p.xz, uBoatA, wg), boatWake(p.xz, uBoatB, wg));
+      n = normalize(n - vec3(wg.x, 0.0, wg.y) * (1.0 - smoothstep(800.0, 3000.0, dist)));
+    }
+
+    // reflection: the sky, and the island, lighthouse and boats on rays heading low toward them
     vec3 rf = reflect(rd, n);
     rf.y = abs(rf.y);
     vec3 refl = skyReflect(p, rf);
+    // on calm water the moon's own disc shows, broken up by the ripples
+    float calm = 1.0 - smoothstep(2.5, 7.0, uWater.w);
+    if (calm > 0.0) refl = mix(refl, moon(rf, refl), calm);
+    if (rf.y < 0.3 && dist < 4000.0) {
+      // off a smoothed surface, as the ripples within a pixel average out: a wavering,
+      // vertically smeared image rather than sparkly noise; it breaks up as the sea roughens
+      float sm = mix(0.55, 0.3, smoothstep(100.0, 1500.0, dist));
+      vec3 rm = reflect(rd, normalize(vec3(n.x * sm, 1.0, n.z * sm)));
+      rm.y = abs(rm.y);
+      vec4 mir = mirrorScene(p, rm, horizon, hb);
+      refl = mix(refl, mir.rgb, mir.a * (1.0 - 0.6 * smoothstep(6.0, 16.0, uWater.w)));
+    }
     refl = mix(refl, fogColor(rf), fogAmount(p, rf, 1e5)); // in fog or dust the sea mirrors the murk
     float shadow = cloudShadow(p);
     float sd = max(dot(rf, SUN), 0.0);
@@ -1413,10 +1564,20 @@ void main() {
 
     // whitecaps on crests once the wind picks up; only some crests break
     float windF = smoothstep(4.0, 12.0, uWater.w);
-    float breakers = smoothstep(0.55, 0.8, noise(p.xz * 0.045 + vec2(t * 0.04, 0.0)) + windF * 0.3 - 0.15);
+    float brk = smoothstep(0.55, 0.8, noise(p.xz * 0.045 + vec2(t * 0.04, 0.0)) + windF * 0.3 - 0.15);
     float tex = fbm(p.xz * 2.2 + vec2(t * 0.35, 0.0)) * 0.75 + noise(p.xz * 9.0 - t) * 0.25;
-    float foam = crest * breakers * windF * uWater.x;
+    float foam = crest * brk * windF * uWater.x;
     foam = clamp(foam * smoothstep(0.42, 0.62, tex) * 1.5, 0.0, 1.0);
+    // crests spilling over: fresh whitecap on the crest and down its downwind face, a dark
+    // hollow under the curling lip, and the foam patches the breaks leave behind
+    if (dist < 450.0) {
+      vec3 br = breakers(p.xz, t, tex, 1.0);
+      vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+      float front = clamp(-dot(w.yz, wd) * 4.0, 0.0, 1.0);
+      float onCrest = smoothstep(0.05, 0.5, crest + front * 0.5);
+      col *= 1.0 - br.z * front * 0.45;
+      foam = max(foam, clamp(br.x * onCrest * smoothstep(0.3, 0.5, tex + 0.15) * 1.6 + br.y, 0.0, 1.0));
+    }
     // long foam streaks blown along the wind in a gale
     if (uWater.w > 9.0) {
       vec2 wdir = vec2(cos(uWave.z), sin(uWave.z));
@@ -1426,14 +1587,23 @@ void main() {
       foam = max(foam, streaks * smoothstep(9.0, 16.0, uWater.w) * 0.35 * uWater.x);
     }
     foam *= 1.0 - smoothstep(60.0, 400.0, dist);
-    foam = max(foam, splash);
+    foam = max(foam, max(splash, wake * (1.0 - smoothstep(1500.0, 3000.0, dist))));
     vec3 foamCol = vec3(0.92) * (SUN_COL * max(el, 0.0) * 1.2 + SKY_AMB * 0.55);
     col = mix(col, foamCol, foam);
     col += SUN_COL * spec * (1.0 - foam);
 
-    // moonlight path on the water
-    float md = max(dot(rf, MOON), 0.0);
-    col += MOON_COL * (pow(md, 1400.0) * 30.0 + pow(md, 120.0) * 0.8) * (1.0 - foam);
+    // moonlight path on the water: glints off every facet tilted just right to mirror the
+    // moon, from ripples too small to see; the rougher the sea and the further off, the
+    // wider and more broken up the path
+    if (MOON_COL.b > 0.001) {
+      vec3 hv = normalize(MOON - rd);
+      float nh = max(dot(n, hv), 0.05);
+      float s2 = 0.0006 + 0.004 * smoothstep(2.0, 14.0, uWater.w) + min(dist * 0.000004, 0.003);
+      float bk = exp(-(1.0 - nh * nh) / (nh * nh * s2)) / (3.1416 * s2 * nh * nh * nh * nh);
+      float glit = mix(1.0, smoothstep(0.55, 0.95, noise(p.xz * 2.5 + vec2(t * 1.3, -t))) * 3.5,
+                       0.4 + 0.6 * smoothstep(3.0, 8.0, uWater.w));
+      col += MOON_COL * bk * glit * 0.015 * (1.0 - foam);
+    }
 
     // glowing plankton lights up wherever the water is stirred, after dark
     float bio = uNight.y * (1.0 - DAY);
@@ -1450,9 +1620,8 @@ void main() {
   }
 
   // the island and its lighthouse
-  float hb = lighthouseBase();
   float tI;
-  vec4 isl = island(ro, rd, horizon, tI);
+  vec4 isl = island(ro, rd, horizon, 64, tI);
   if (isl.a > 0.0 && tI < hitT) { col = isl.rgb; hitT = tI; }
   float tL;
   vec4 lh = lighthouse(ro, rd, horizon, hb, tL);
@@ -1475,6 +1644,13 @@ void main() {
   float tS;
   vec4 spout = waterspout(ro, rd, tS);
   if (spout.a > 0.0 && tS < hitT) col = mix(col, mix(spout.rgb, fogC, fogAmount(ro, rd, tS)), spout.a);
+
+  // spray torn off the breaking crests, glowing when you look toward the sun
+  float spr = spindrift(ro, rd, hitT, t);
+  if (spr > 0.0) {
+    vec3 sprC = vec3(0.9, 0.93, 0.96) * (SKY_AMB * 0.75 + SUN_COL * (0.35 + pow(max(dot(rd, SUN), 0.0), 6.0) * 0.8));
+    col = mix(col, sprC, clamp(spr, 0.0, 1.0));
+  }
 
   // pale sun disc glowing through dust or thin fog
   if (rd.y > 0.0) {
