@@ -67,7 +67,7 @@ Press `H` (or the slider button) to open the settings panel.
 
 ## Running locally
 
-It's a single static file, so you can just open `index.html` in a browser.
+There's no build step, so you can just open `index.html` in a browser.
 
 If your browser is strict about local files, serve the folder instead:
 
@@ -76,6 +76,16 @@ python3 -m http.server
 ```
 
 Then go to <http://localhost:8000>.
+
+## Project layout
+
+| File | What's in it |
+|---|---|
+| `index.html` | The page: settings panel, buttons and share tags |
+| `css/style.css` | Styles for the panel, buttons and touch controls |
+| `js/shaders.js` | The GLSL shader that draws everything: sea, sky, clouds, weather, island, wildlife |
+| `js/stars.js` | The bright-star catalogue and constellation lines |
+| `js/app.js` | WebGL setup, camera, settings, presets, real sky, boats, wildlife events, sound |
 
 ## Browser support
 
