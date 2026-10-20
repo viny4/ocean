@@ -1598,7 +1598,9 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, int steps, out float tI) {
     t += dt;
   }
   if (!hit) return vec4(0.0);
+  bool fine = steps >= 64;                                 // seen directly, not just mirrored in the sea
   for (int i = 0; i < 5; i++) {
+    if (!fine && i >= 3) break;
     float tm = 0.5 * (tp + t);
     vec3 p = ro + rd * tm;
     if (p.y < isleHeight(p.xz)) t = tm; else tp = tm;
@@ -1606,8 +1608,15 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, int steps, out float tI) {
   vec3 p = ro + rd * t;
   if (p.y < -0.5) return vec4(0.0);                       // under the waterline: the sea covers it
   float e = max(1.0, t * 0.002);
-  float h0 = isleDetail(p.xz);
-  vec3 n = normalize(vec3(h0 - isleDetail(p.xz + vec2(e, 0.0)), e, h0 - isleDetail(p.xz + vec2(0.0, e))));
+  vec3 n;
+  if (fine) {
+    float h0 = isleDetail(p.xz);
+    n = normalize(vec3(h0 - isleDetail(p.xz + vec2(e, 0.0)), e, h0 - isleDetail(p.xz + vec2(0.0, e))));
+  } else {                                                  // the wavering mirror image can't show the rocks
+    e *= 4.0;
+    float h0 = isleHeight(p.xz);
+    n = normalize(vec3(h0 - isleHeight(p.xz + vec2(e, 0.0)), e, h0 - isleHeight(p.xz + vec2(0.0, e))));
+  }
   vec3 rock = vec3(0.40, 0.38, 0.35) * (0.8 + 0.4 * noise(p.xz * 0.3 + p.y));
   vec3 grass = mix(vec3(0.24, 0.32, 0.13), vec3(0.34, 0.36, 0.18), noise(p.xz * 0.05));
   grass = mix(grass, vec3(0.09, 0.17, 0.07), smoothstep(0.45, 0.7, noise(p.xz * 0.04 + 9.0)) * 0.85); // stands of trees
@@ -1622,7 +1631,7 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, int steps, out float tI) {
   float swashY = 0.15 + 0.6 * run * cove;
   float wet = 1.0 - smoothstep(swashY + 0.1, swashY + 0.7 + 0.4 * cove, p.y);
   alb *= 1.0 - 0.45 * wet;
-  float lit = isleSunlight(vec3(p.x, max(p.y, isleHeight(p.xz)) + 0.5, p.z), lighthouseBase(), true);
+  float lit = isleSunlight(vec3(p.x, max(p.y, isleHeight(p.xz)) + 0.5, p.z), lighthouseBase(), fine);
   vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) * (0.75 + 0.25 * lit)
                     + (SUN_COL * max(dot(n, SUN), 0.0) * 0.95 + MOON_COL * max(dot(n, MOON), 0.0) * 0.6) * lit);
   vec3 hv = normalize(SUN - rd);
@@ -2184,8 +2193,9 @@ void wildlife(vec3 ro, vec3 rd, vec3 horizon, inout vec3 col, inout float hitT) 
 }
 
 // ---------- what the sea mirrors ----------
-// the island, lighthouse and boats seen along a reflected ray: a coarse march of the island
-// and the cheap cut-outs for the rest. a is how much of the sky behind they hide.
+// the island and lighthouse seen along a reflected ray: a coarse march of the island and the
+// cheap cut-out tower. a is how much of the sky behind they hide. (The boats are left out:
+// a third and fourth copy of their code costs a lot on the GPU for a few far-off pixels.)
 vec4 mirrorScene(vec3 p, vec3 rf, vec3 haze, float hb) {
   vec4 m = vec4(0.0);
   float tM = 1e5, tH;
@@ -2193,10 +2203,6 @@ vec4 mirrorScene(vec3 p, vec3 rf, vec3 haze, float hb) {
   if (h.a > 0.0) { m = h; tM = tH; }
   h = lighthouse(p, rf, haze, hb, tH);
   if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
-  h = boat(p, rf, uBoatA, haze, tH);
-  if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
-  h = boat(p, rf, uBoatB, haze, tH);
-  if (h.a > 0.0 && tH < tM) m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a));
   return m;
 }
 
