@@ -2226,16 +2226,18 @@ vec3 breakers(vec2 p, float t, float tex, float grow) {
     vec2 fg = fract(g);
     vec2 d = (fg - vec2(0.2 + 0.15 * h3, 0.3 + 0.4 * h2)) * sz;
     d.x -= min(age * T, 2.5) * run;
-    vec2 r = sz * vec2(0.16, 0.19) * (0.45 + 0.75 * sqrt(age)) * (0.7 + 0.5 * h3) * grow;
+    vec2 r = sz * vec2(0.11, 0.27) * (0.45 + 0.75 * sqrt(age)) * (0.7 + 0.5 * h3) * grow
+           * mix(0.35, 1.0, smoothstep(6.0, 16.0, uWater.w));  // light airs only break small
     vec2 e = d / r;
     vec2 edge = min(fg, 1.0 - fg);                          // never cut off at the cell's edge
     float blob = smoothstep(1.0, 0.65, length(e) + (tex - 0.5) * 0.9) * smoothstep(0.0, 0.1, min(edge.x, edge.y));
     float fresh = smoothstep(0.0, 0.02, age) * (1.0 - smoothstep(0.15, 0.45, age));
     // the old foam frays into lace and thins out
-    float lace = smoothstep(0.32 + 0.3 * age, 0.45 + 0.3 * age, tex);
+    float lace = smoothstep(0.4 + 0.25 * age, 0.5 + 0.25 * age, tex);
     float old = blob * pow(1.0 - age, 1.5) * lace * 0.8;
     float curl = smoothstep(0.75, 1.0, e.x) * smoothstep(1.4, 1.05, e.x) * smoothstep(1.0, 0.5, abs(e.y)) * fresh;
-    res = max(res, vec3(blob * fresh, old, curl));
+    float torn = smoothstep(0.28, 0.6, tex + 0.25 * (1.0 - length(e)));  // torn white water, densest at the heart, never a flat sheet
+    res = max(res, vec3(blob * fresh * torn, old, curl));
   }
   return res;
 }
