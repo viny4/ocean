@@ -2087,29 +2087,131 @@ void main() {
     const buf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
     const d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const layer = (rate, type, freq, q) => {
+    // sounds heard from inside the water (bubbles, hum, the splash) skip the muffle
+    const dry = ctx.createGain();
+    dry.gain.value = 0;
+    dry.connect(ctx.destination);
+    const layer = (rate, type, freq, q, out = master) => {
       const s = ctx.createBufferSource();
       s.buffer = buf; s.loop = true; s.playbackRate.value = rate;
       const f = ctx.createBiquadFilter();
       f.type = type; f.frequency.value = freq; f.Q.value = q;
       const g = ctx.createGain();
       g.gain.value = 0;
-      s.connect(f); f.connect(g); g.connect(master);
+      s.connect(f); f.connect(g); g.connect(out);
       s.start();
       return { f, g };
     };
+    const panner = out => {
+      const p = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
+      p.connect(out);
+      return p;
+    };
+    // a long, echoing tail for the foghorn: decaying stereo noise with a few cliff echoes
+    const verb = ctx.createConvolver();
+    const ir = ctx.createBuffer(2, ctx.sampleRate * 4, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = ir.getChannelData(c);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3.5) * 0.5;
+      for (const [at, a] of [[0.31, 0.5], [0.72, 0.35], [1.25, 0.22]]) {
+        const j = Math.floor((at + c * 0.023) * ctx.sampleRate);
+        for (let i = 0; i < 2000; i++) d[j + i] += (Math.random() * 2 - 1) * a * (1 - i / 2000);
+      }
+    }
+    verb.buffer = ir;
+    verb.connect(master);
+    // the shore: one noise voice whose envelope is re-shaped for each breaking swell
+    const shorePan = panner(master);
+    const shoreAir = ctx.createBiquadFilter(); // air soaks up the highs of a distant shore
+    shoreAir.type = 'lowpass'; shoreAir.frequency.value = 1200;
+    shoreAir.connect(shorePan);
+    const shoreLvl = ctx.createGain();
+    shoreLvl.gain.value = 0;
+    shoreLvl.connect(shoreAir);
+    const shore = layer(0.9, 'lowpass', 300, 0.6, shoreLvl); // g = swell envelope, f = brightness
+    // the foghorn bus: distance level, then panned dry plus a send into the echo
+    const hornPan = panner(master);
+    const hornAir = ctx.createBiquadFilter();
+    hornAir.type = 'lowpass'; hornAir.frequency.value = 900;
+    hornAir.connect(hornPan);
+    const hornSend = ctx.createGain();
+    hornSend.gain.value = 0.7;
+    hornAir.connect(hornSend); hornSend.connect(verb);
+    // a diesel putter per boat: sawtooth + rumble noise, beaten by a firing-rate LFO
+    const engine = (freq, fire) => {
+      const pan = panner(master);
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 240; lp.Q.value = 1.5;
+      lp.connect(g); g.connect(pan);
+      const am = ctx.createGain();
+      am.gain.value = 0.55;
+      am.connect(lp);
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth'; o.frequency.value = freq;
+      o.connect(am);
+      const rumble = layer(0.5, 'lowpass', 110, 1, am);
+      rumble.g.gain.value = 2.2;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = fire;
+      const depth = ctx.createGain();
+      depth.gain.value = 0.45;
+      lfo.connect(depth); depth.connect(am.gain);
+      o.start(); lfo.start();
+      return { g, pan, o, lfo, freq, fire };
+    };
+    // underwater: a low pressure hum from two detuned sines and a deep noise bed
+    const hum = ctx.createGain();
+    hum.gain.value = 0;
+    hum.connect(dry);
+    for (const f of [47, 71.5]) {
+      const o = ctx.createOscillator();
+      o.frequency.value = f;
+      o.connect(hum); o.start();
+    }
+    const deep = layer(0.3, 'lowpass', 120, 0.8, dry);
+    // the roar of a waterspout or hurricane
+    const roarPan = panner(master);
     Object.assign(audio, {
-      ctx, master, buf,
+      ctx, master, buf, dry, verb, panner,
       surf: layer(1, 'lowpass', 400, 0.7),      // deep roll of the swell
       hiss: layer(0.8, 'bandpass', 2500, 0.6),  // fizz of breaking crests
       wind: layer(1.3, 'bandpass', 500, 1.5),
+      whistle: layer(1.1, 'bandpass', 1100, 22), // tonal howl through rigging and rocks
+      whistle2: layer(0.9, 'bandpass', 1700, 30),
       rain: layer(1, 'highpass', 2200, 0.5),
+      shore, shoreLvl, shoreAir, shorePan,
+      hornAir, hornPan,
+      engines: [engine(41, 5.2), engine(28, 3.1)], // sloop's auxiliary, the ship's big slow diesel
+      hum, deep,
+      roar: layer(0.35, 'lowpass', 150, 1.1, roarPan),
+      roarHi: layer(0.6, 'bandpass', 380, 0.9, roarPan),
+      roarPan,
     });
   }
+  // stereo position of a world point: -1 hard left, 1 hard right, from the way you face
+  function panTo(x, z) {
+    const dx = x - pos.x, dz = z - pos.z, d = Math.hypot(dx, dz) || 1;
+    return Math.max(-1, Math.min(1, (dx * Math.cos(yaw) - dz * Math.sin(yaw)) / d));
+  }
+  function setPan(node, v, now) { if (node.pan) node.pan.setTargetAtTime(v, now, 0.1); }
+  const LIGHT = { x: -418, z: 1253 };
+  const snd = {
+    shoreT: 2, hornT: 8, creakT: 6, bubbleT: 1, bubbles: 0, creaking: false,
+    gust: 0.5, gustTo: 0.5, gustT: 0, wasUnder: false, mutedFor: 0,
+  };
   function updateAudio(t, dt) {
     if (!audio.ctx) return;
-    const now = audio.ctx.currentTime, k = 0.3;
+    const ctx = audio.ctx, now = ctx.currentTime, k = 0.3;
     audio.master.gain.setTargetAtTime(S.muted ? 0 : C.volume, now, 0.4);
+    audio.dry.gain.setTargetAtTime(S.muted ? 0 : C.volume, now, 0.4);
+    // once muted and faded out, stop the whole graph; unmuting resumes it
+    if (S.muted) {
+      if ((snd.mutedFor += dt) > 2 && ctx.state === 'running') ctx.suspend();
+      return;
+    }
+    snd.mutedFor = 0;
     audio.muffle.frequency.setTargetAtTime(underwater ? 380 : 20000, now, 0.15);
     const near = Math.max(0.15, 1 - (pos.y - 2) / 60);            // the sea fades as you climb
     const sea = 0.3 + 0.7 * smooth(3, 22, C.windSpeed);
@@ -2118,14 +2220,190 @@ void main() {
     audio.surf.f.frequency.setTargetAtTime(220 + 380 * swell * sea, now, k);
     audio.hiss.g.gain.setTargetAtTime(0.05 * sea * Math.max(0, swell - 0.35) * near * (0.4 + C.foam * 0.5), now, k);
     const w = smooth(4, 24, C.windSpeed);
-    const gust = 0.65 + 0.35 * Math.sin(t * 1.3) * Math.sin(t * 0.37 + 2.0);
+    // gusts: a new target every few seconds; they swell in quicker than they die away
+    if ((snd.gustT -= dt) <= 0) {
+      snd.gustT = 1.5 + Math.random() * 4.5 * (1.2 - w);
+      snd.gustTo = Math.random() < 0.35 ? 0.15 + Math.random() * 0.3 : 0.55 + Math.random() * (0.45 + 0.4 * w);
+    }
+    snd.gust += (snd.gustTo - snd.gust) * (1 - Math.exp(-dt * (snd.gustTo > snd.gust ? 1.1 : 0.45)));
+    const gust = (0.45 + 0.6 * snd.gust) * (0.92 + 0.08 * Math.sin(t * 1.3));
     audio.wind.g.gain.setTargetAtTime(0.4 * w * w * gust, now, k);
     audio.wind.f.frequency.setTargetAtTime(280 + 750 * w * gust, now, k);
+    // the whistle only comes in with strong wind, its pitch riding the gusts
+    const howl = smooth(12, 24, C.windSpeed) * smooth(0.3, 0.9, snd.gust);
+    audio.whistle.g.gain.setTargetAtTime(1.1 * howl, now, 0.5);
+    audio.whistle.f.frequency.setTargetAtTime(700 + 650 * snd.gust + 120 * Math.sin(t * 0.53), now, 0.4);
+    audio.whistle2.g.gain.setTargetAtTime(0.7 * howl * (0.5 + 0.5 * Math.sin(t * 0.31 + 1)), now, 0.6);
+    audio.whistle2.f.frequency.setTargetAtTime(1300 + 900 * snd.gust + 200 * Math.sin(t * 0.77 + 2), now, 0.4);
     audio.rain.g.gain.setTargetAtTime(0.22 * Math.min(1, C.rain + C.hail * 1.3 + C.snow * 0.08), now, k);
+
+    // shore surf: louder as you near the coast, coming from the island's direction
+    const toShore = Math.max(0, Math.hypot(pos.x - ISLE.x, pos.z - ISLE.z) - ISLE.r * 0.95);
+    const shoreNear = 1 / (1 + Math.pow(toShore / 220, 1.4));
+    audio.shoreLvl.gain.setTargetAtTime(0.9 * shoreNear * (0.45 + 0.55 * sea), now, k);
+    audio.shoreAir.frequency.setTargetAtTime(500 + 4500 * shoreNear, now, k);
+    setPan(audio.shorePan, panTo(ISLE.x, ISLE.z) * smooth(0, 250, toShore), now);
+    if ((snd.shoreT -= dt) <= 0) {
+      snd.shoreT = 6 + Math.random() * 6;
+      const peak = (0.55 + 0.45 * Math.random()) * (0.6 + 0.4 * sea);
+      const g = audio.shore.g.gain, f = audio.shore.f.frequency;
+      g.cancelScheduledValues(now); f.cancelScheduledValues(now);
+      g.setTargetAtTime(peak, now, 0.7);            // the swell builds and breaks...
+      g.setTargetAtTime(0.06, now + 1.8, 1.9);      // ...then washes back over the rocks
+      f.setTargetAtTime(1600 + 1200 * Math.random(), now, 0.6);
+      f.setTargetAtTime(280, now + 1.6, 1.4);
+    }
+
+    // the lighthouse foghorn sounds in fog and at night
+    const hornOn = C.fog > 0.3 || C.sunElev < -6;
+    if (hornOn && (snd.hornT -= dt) <= 0) {
+      snd.hornT = 30 + Math.random() * 30;
+      foghorn(Math.hypot(pos.x - LIGHT.x, pos.z - LIGHT.z));
+    }
+    if (!hornOn) snd.hornT = Math.min(snd.hornT, 4 + Math.random() * 4);
+    setPan(audio.hornPan, panTo(LIGHT.x, LIGHT.z) * 0.8, now);
+
+    // boats: engines throbbing faintly across the water, creaks when one is close
+    let creakLvl = 0, creakPan = 0;
+    boats.forEach((b, i) => {
+      const e = audio.engines[i], d = Math.hypot(b.x - pos.x, b.z - pos.z);
+      const v = boatAmt * Math.pow(Math.min(1, (i ? 500 : 260) / d), 1.3) * (i ? 0.3 : 0.2);
+      e.g.gain.setTargetAtTime(v, now, k);
+      e.o.frequency.setTargetAtTime(e.freq * (1 + 0.025 * Math.sin(t * 0.21 + i * 3)), now, k);
+      e.lfo.frequency.setTargetAtTime(e.fire * (1 + 0.025 * Math.sin(t * 0.21 + i * 3)), now, k);
+      setPan(e.pan, panTo(b.x, b.z), now);
+      const c = boatAmt * Math.min(1, 300 / d) * (i ? 0.6 : 1);
+      if (c > creakLvl) { creakLvl = c; creakPan = panTo(b.x, b.z); }
+    });
+    if (creakLvl > 0.3 && !snd.creaking && (snd.creakT -= dt) <= 0) {
+      snd.creakT = 4 + Math.random() * 9;
+      creak(creakLvl, creakPan, sea);
+    }
+
+    // underwater: a pressure hum, deeper as you dive, and bubbles drifting past
+    const depth = Math.max(0, -pos.y);
+    audio.hum.gain.setTargetAtTime(underwater ? 0.05 + 0.1 * smooth(0, 8, depth) : 0, now, 0.25);
+    audio.deep.g.gain.setTargetAtTime(underwater ? 0.6 + 0.6 * smooth(0, 8, depth) : 0, now, 0.25);
+    if (underwater && (snd.bubbleT -= dt) <= 0) {
+      snd.bubbleT = Math.random() < 0.3 ? 0.05 + Math.random() * 0.12 : 0.3 + Math.random() * 1.4;
+      bubble();
+    }
+    if (underwater !== snd.wasUnder) splash(underwater);
+    snd.wasUnder = underwater;
+
+    // a deep roar from a waterspout or a hurricane
+    const sd = Math.hypot(spout.x - pos.x, spout.z - pos.z);
+    const sp = spout.placed ? spout.grow * Math.min(1, 1800 / sd) : 0;
+    const hur = smooth(19, 25, C.windSpeed);
+    const roar = Math.min(1, sp + hur) * (0.8 + 0.2 * snd.gust);
+    audio.roar.g.gain.setTargetAtTime(1.3 * roar, now, 0.5);
+    audio.roarHi.g.gain.setTargetAtTime(0.35 * roar, now, 0.5);
+    audio.roarHi.f.frequency.setTargetAtTime(260 + 220 * snd.gust + 60 * Math.sin(t * 0.4), now, 0.5);
+    setPan(audio.roarPan, sp > 0 ? panTo(spout.x, spout.z) * sp / (sp + hur + 1e-3) : 0, now);
+
     // gulls call now and then while they are around
     if (birdAmt > 0.3 && (gullTimer -= dt) <= 0) {
       gullTimer = 5 + Math.random() * 14;
       gullCall(birdAmt);
+    }
+  }
+  // the foghorn: a diaphone's high "bee" dropping to a low grunting "oh", heard late from afar
+  function foghorn(dist) {
+    const ctx = audio.ctx;
+    const t0 = ctx.currentTime + Math.min(dist / 343, 6);
+    const v = 0.35 / (1 + dist / 1200);
+    audio.hornAir.frequency.setTargetAtTime(500 + 1400 / (1 + dist / 1500), ctx.currentTime, 0.2);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v, t0 + 0.25);
+    g.gain.setValueAtTime(v, t0 + 2.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 3.4);
+    g.connect(audio.hornAir);
+    for (const det of [0, 4]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.detune.value = det;
+      o.frequency.setValueAtTime(150, t0);
+      o.frequency.linearRampToValueAtTime(178, t0 + 0.2);   // the tearing start
+      o.frequency.setValueAtTime(178, t0 + 1.35);
+      o.frequency.linearRampToValueAtTime(132, t0 + 1.5);   // down to the grunt
+      o.frequency.linearRampToValueAtTime(118, t0 + 3.4);
+      o.connect(g);
+      o.start(t0); o.stop(t0 + 3.5);
+    }
+  }
+  // wooden creaks and rope groans: a slow stick-slip buzz through a resonant body
+  function creak(level, pan, sea) {
+    const ctx = audio.ctx;
+    snd.creaking = true;
+    const t0 = ctx.currentTime, rope = Math.random() < 0.4;
+    const dur = 0.5 + Math.random() * (rope ? 1.2 : 0.7);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const f0 = rope ? 70 + Math.random() * 40 : 18 + Math.random() * 22;
+    o.frequency.setValueAtTime(f0, t0);
+    o.frequency.linearRampToValueAtTime(f0 * (0.6 + Math.random() * 0.9), t0 + dur);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = rope ? 260 + Math.random() * 120 : 700 + Math.random() * 600;
+    bp.Q.value = rope ? 5 : 8;
+    const g = ctx.createGain();
+    const v = 0.12 * level * (0.6 + 0.4 * sea);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v, t0 + dur * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    const p = audio.panner(audio.master);
+    if (p.pan) p.pan.value = pan;
+    o.connect(bp); bp.connect(g); g.connect(p);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+    o.onended = () => { snd.creaking = false; p.disconnect(); };
+  }
+  // a bubble: a short rising sine chirp
+  function bubble() {
+    if (snd.bubbles >= 6) return;
+    const ctx = audio.ctx;
+    snd.bubbles++;
+    const t0 = ctx.currentTime, dur = 0.03 + Math.random() * 0.08;
+    const f0 = 350 + Math.random() * 900;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(f0, t0);
+    o.frequency.exponentialRampToValueAtTime(f0 * (1.5 + Math.random()), t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.03 + Math.random() * 0.05, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    const p = audio.panner(audio.dry);
+    if (p.pan) p.pan.value = Math.random() * 1.4 - 0.7;
+    o.connect(g); g.connect(p);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    o.onended = () => { snd.bubbles--; p.disconnect(); };
+  }
+  // crossing the surface: a plunge with a deep thump going in, a sloshing wash coming out
+  function splash(into) {
+    const ctx = audio.ctx, t0 = ctx.currentTime;
+    const s = ctx.createBufferSource();
+    s.buffer = audio.buf; s.playbackRate.value = into ? 0.8 : 1.1;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.Q.value = 0.8;
+    f.frequency.setValueAtTime(into ? 2600 : 1800, t0);
+    f.frequency.exponentialRampToValueAtTime(into ? 300 : 700, t0 + (into ? 0.6 : 0.9));
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(into ? 0.7 : 0.45, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + (into ? 0.8 : 1.1));
+    s.connect(f); f.connect(g); g.connect(audio.dry);
+    s.start(t0, Math.random() * 2.5); s.stop(t0 + 1.2);
+    if (into) {
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(160, t0);
+      o.frequency.exponentialRampToValueAtTime(45, t0 + 0.35);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.0001, t0);
+      og.gain.exponentialRampToValueAtTime(0.4, t0 + 0.015);
+      og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.4);
+      o.connect(og); og.connect(audio.dry);
+      o.start(t0); o.stop(t0 + 0.45);
+      for (let i = 0; i < 4; i++) setTimeout(() => audio.ctx && bubble(), 80 + i * (60 + Math.random() * 90));
     }
   }
   let gullTimer = 3;
