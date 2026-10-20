@@ -24,7 +24,7 @@
   canvas:active { cursor: grabbing; }
   #hint {
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
-    padding: 8px 14px; border-radius: 999px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    padding: 8px 14px; border-radius: 999px; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box;
     font: 13px/1.4 system-ui, -apple-system, sans-serif; color: #fff; text-align: center;
     background: rgba(0, 30, 50, 0.35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     pointer-events: none; transition: opacity 1.5s ease;
@@ -37,16 +37,44 @@
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     transition: background 0.2s;
   }
-  #gear:hover, #sound:hover, #photo:hover { background: rgba(8, 22, 34, 0.7); }
-  body.shooting #hint, body.shooting #gear, body.shooting #sound, body.shooting #photo, body.shooting #panel { visibility: hidden; }
+  #gear:hover, #sound:hover, #photo:hover, #cam:hover { background: rgba(8, 22, 34, 0.7); }
+  body.shooting #hint, body.shooting #gear, body.shooting #sound, body.shooting #photo, body.shooting #cam,
+  body.shooting #panel, body.shooting #touch > * { visibility: hidden; }
   #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity 0.6s ease; }
-  #sound, #photo {
+  #sound, #photo, #cam {
     position: fixed; right: 16px; bottom: 68px; width: 42px; height: 42px; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; font-size: 17px; padding: 0;
     background: rgba(8, 22, 34, 0.45); border: 1px solid rgba(255, 255, 255, 0.14);
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background 0.2s;
   }
   #photo { bottom: 120px; }
+  #cam { bottom: 172px; }
+
+  /* touch controls: a joystick bottom-left, up / down / fast buttons beside it */
+  #touch { display: none; }
+  body.touch #touch { display: contents; }
+  body.touch #hint { bottom: auto; top: 16px; border-radius: 14px; }
+  #stick {
+    position: fixed; left: 20px; bottom: 20px; width: 128px; height: 128px; border-radius: 50%;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    background: rgba(8, 22, 34, 0.3); border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  #knob {
+    position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.26); border: 1px solid rgba(255, 255, 255, 0.45); pointer-events: none;
+  }
+  .tbtn {
+    position: fixed; left: 162px; width: 52px; height: 52px; border-radius: 50%; padding: 0;
+    display: grid; place-items: center; color: #fff; font-size: 18px;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    background: rgba(8, 22, 34, 0.45); border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .tbtn.on, .tbtn[aria-pressed="true"] { background: rgba(95, 212, 224, 0.35); border-color: rgba(95, 212, 224, 0.75); }
+  #dive { bottom: 24px; }
+  #rise { bottom: 86px; }
+  #fast { bottom: 148px; }
 
   #panel {
     position: fixed; top: 16px; right: 16px; width: 300px; max-width: calc(100vw - 32px);
@@ -100,12 +128,37 @@
   .row label { opacity: 0.88; }
   .row output { font-size: 12px; opacity: 0.6; font-variant-numeric: tabular-nums; }
   .row input { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: #5fd4e0; }
+  .presets.four { grid-template-columns: repeat(4, 1fr); }
+
+  /* phones and tablets: bigger targets, and the panel fills a narrow screen and scrolls */
+  @media (pointer: coarse), (max-width: 520px) {
+    #panel { font-size: 14px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    #panel .x { font-size: 26px; padding: 2px 8px; }
+    .presets button { padding: 9px 4px; min-height: 52px; }
+    .wide { padding: 11px 8px; font-size: 13px; }
+    details.group summary { padding: 14px 2px; font-size: 12px; }
+    .row { margin: 12px 0; }
+    .row input { height: 28px; }
+  }
+  @media (max-width: 520px) {
+    #panel {
+      top: 8px; left: 8px; right: 8px; width: auto; max-width: none;
+      max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); padding: 12px 12px 16px;
+    }
+  }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="flash"></div>
-<div id="hint">W A S D / arrows to move · drag to look · E / Q up &amp; down (Q at the surface to dive) · Shift faster · H settings · M sound · P photo</div>
+<div id="hint">W A S D / arrows to move · drag to look · E / Q up &amp; down (Q at the surface to dive) · Shift faster · C camera · H settings · M sound · P photo</div>
+<div id="touch">
+  <div id="stick" aria-label="Move"><div id="knob"></div></div>
+  <button id="fast" class="tbtn" aria-pressed="false" aria-label="Move faster">⚡</button>
+  <button id="rise" class="tbtn" aria-label="Rise">▲</button>
+  <button id="dive" class="tbtn" aria-label="Dive">▼</button>
+</div>
+<button id="cam" aria-label="Camera mode" title="Camera mode (C)">🎥</button>
 <button id="photo" aria-label="Save a photo" title="Save a photo (P)">📷</button>
 <button id="sound" aria-label="Sound on or off" title="Sound (M)">🔊</button>
 <button id="gear" aria-label="Settings" title="Settings (H)">
@@ -123,6 +176,10 @@
   <div class="presets" id="times"></div>
   <button id="realsky" class="wide" aria-pressed="false" title="Sun, moon and stars where they really are, for your location and time">📍 Real sky now</button>
   <div id="realinfo" hidden></div>
+  <div class="section">Camera</div>
+  <div class="presets four" id="cams"></div>
+  <div class="section">Quality</div>
+  <div class="presets four" id="quality"></div>
   <div id="sliders"></div>
   <button id="reset" class="wide">Reset to default</button>
 </div>
@@ -580,13 +637,17 @@ float hg(float mu, float g) {
 }
 
 // volumetric clouds along a ray: (light scattered toward the eye, transmittance)
+// the step count is set by the quality setting
+#ifndef CLOUD_N
+#define CLOUD_N 56
+#endif
 vec4 cloudMarch(vec3 ro, vec3 rd, float jitter) {
   if (rd.y < 0.01) return vec4(0.0, 0.0, 0.0, 1.0);
   float t0 = (CLOUD_LO - ro.y) / rd.y;
   float t1 = min((CLOUD_HI - ro.y) / rd.y, t0 + 7000.0);
   if (t0 > 45000.0) return vec4(0.0, 0.0, 0.0, 1.0);
 
-  const int N = 56;
+  const int N = CLOUD_N;
   float dt = (t1 - t0) / float(N);
   float t = t0 + dt * jitter;
   float mu = dot(rd, SUN);
@@ -1576,17 +1637,28 @@ void main() {
   const vsSrc = document.getElementById('vs').text, fsSrc = document.getElementById('fs').text;
   function program(defines) {
     const p = gl.createProgram();
-    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
-    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, defines + fsSrc));
+    const vs = compile(gl.VERTEX_SHADER, vsSrc), fs = compile(gl.FRAGMENT_SHADER, defines + fsSrc);
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
     gl.bindAttribLocation(p, 0, 'aPos');
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    gl.deleteShader(vs); gl.deleteShader(fs); // freed along with the program
     const loc = {};
     for (const n of NAMES) loc[n] = gl.getUniformLocation(p, n);
     return { p, loc };
   }
-  const mainProg = program('');
-  const cloudProg = program('#define CLOUD_PASS\n');
+  // rebuilt when the quality setting changes the number of cloud steps
+  let mainProg = null, cloudProg = null, progSteps = 0;
+  function buildPrograms(steps) {
+    if (steps === progSteps) return;
+    for (const pr of [mainProg, cloudProg]) if (pr) gl.deleteProgram(pr.p);
+    const defs = `#define CLOUD_N ${steps}\n`;
+    mainProg = program(defs);
+    cloudProg = program(defs + '#define CLOUD_PASS\n');
+    progSteps = steps;
+    histOk = false;
+  }
 
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1621,8 +1693,9 @@ void main() {
   let targets = [], cloudW = 0, cloudH = 0, cur = 0, histOk = false;
 
   // render resolution adapts to keep the GPU (and the rest of the machine) responsive
-  const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
-  let renderScale = 0.5;
+  // (the quality setting below caps both the pixel ratio and the scale range)
+  let maxDpr = Math.min(window.devicePixelRatio || 1, 2);
+  let renderScale = 0.5, scaleMin = 0.3, scaleMax = 1;
   function resize() {
     const s = maxDpr * renderScale;
     canvas.width = Math.max(1, Math.floor(window.innerWidth * s));
@@ -1643,8 +1716,8 @@ void main() {
     const fps = perfFrames / perfTime;
     perfTime = 0; perfFrames = 0;
     const old = renderScale;
-    if (fps < 45) renderScale = Math.max(0.3, renderScale * 0.88);
-    else if (fps > 57) renderScale = Math.min(1, renderScale * 1.06);
+    if (fps < 45) renderScale = Math.max(scaleMin, renderScale * 0.88);
+    else if (fps > 57) renderScale = Math.min(scaleMax, renderScale * 1.06);
     if (renderScale !== old) resize();
   }
 
@@ -1721,6 +1794,38 @@ void main() {
   const S = { ...DEFAULTS, weather: null, time: null }; // targets: what the sliders show
   try { Object.assign(S, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) {} }
+
+  // ---------- quality ----------
+  // caps on pixel ratio, resolution and cloud detail; Auto is the adaptive resolution,
+  // held a little lower on phones and tablets
+  const MOBILE = matchMedia('(pointer: coarse)').matches || Math.min(screen.width, screen.height) < 600;
+  const QUALITY = {
+    auto:   { label: 'Auto',   icon: '🪄', dpr: MOBILE ? 1.5 : 2, min: 0.3, max: MOBILE ? 0.75 : 1, clouds: MOBILE ? 40 : 56 },
+    low:    { label: 'Low',    icon: '🔋', dpr: 1,   min: 0.3, max: 0.6, clouds: 28 },
+    medium: { label: 'Medium', icon: '⚖️', dpr: 1.5, min: 0.3, max: 0.8, clouds: 40 },
+    high:   { label: 'High',   icon: '💎', dpr: 2,   min: 0.5, max: 1,   clouds: 56 },
+  };
+  if (!Object.prototype.hasOwnProperty.call(QUALITY, S.quality)) S.quality = 'auto';
+  function applyQuality() {
+    const q = QUALITY[S.quality];
+    maxDpr = Math.min(window.devicePixelRatio || 1, q.dpr);
+    scaleMin = q.min; scaleMax = q.max;
+    renderScale = Math.min(scaleMax, Math.max(scaleMin, renderScale));
+    buildPrograms(q.clouds);
+    resize();
+    for (const n in qualityBtns) qualityBtns[n].setAttribute('aria-pressed', String(S.quality === n));
+  }
+  const qualityBtns = {};
+  for (const name in QUALITY) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="ic">${QUALITY[name].icon}</span><span>${QUALITY[name].label}</span>`;
+    b.title = name === 'auto' ? 'Resolution adapts to keep things smooth' : `${QUALITY[name].label} detail`;
+    b.addEventListener('click', () => { S.quality = name; save(); applyQuality(); });
+    document.getElementById('quality').appendChild(b);
+    qualityBtns[name] = b;
+  }
+  applyQuality();
+
   const C = { ...S }; // what the scene shows right now; eases toward S
   const rate = Object.fromEntries(Object.keys(DEFAULTS).map(k => [k, 8]));
 
@@ -1916,14 +2021,30 @@ void main() {
 
   // ---------- camera controls ----------
   // drag to look around
+  // drag to look around (one finger at a time; with the camera on a boat, dragging swings it round the boat)
   let yaw = 0, pitch = -0.16, tYaw = yaw, tPitch = pitch, drag = null;
-  canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener('pointerup', () => { drag = null; });
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') useTouch(true);
+    if (drag) return;
+    if (camMode === 'tour') setCam('free');
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  const endDrag = e => { if (drag && e.pointerId === drag.id) drag = null; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('pointermove', e => {
-    if (!drag) return;
-    tYaw -= (e.clientX - drag.x) * 0.004;
-    tPitch = Math.max(-1.2, Math.min(0.5, tPitch + (e.clientY - drag.y) * 0.004));
-    drag = { x: e.clientX, y: e.clientY };
+    if (!drag || e.pointerId !== drag.id) return;
+    const k = e.pointerType === 'touch' ? 0.005 : 0.004;
+    const dx = (e.clientX - drag.x) * k, dy = (e.clientY - drag.y) * k;
+    if (CAMS[camMode].boat !== undefined) {
+      follow.orbit -= dx;
+      follow.tilt = Math.max(-0.2, Math.min(1, follow.tilt + dy));
+    } else {
+      tYaw -= dx;
+      tPitch = Math.max(-1.2, Math.min(0.5, tPitch + dy));
+    }
+    drag = { id: drag.id, x: e.clientX, y: e.clientY };
   });
 
   // keyboard movement
@@ -1935,8 +2056,9 @@ void main() {
     if (e.code === 'KeyH' && !e.repeat) { togglePanel(); return; }
     if (e.code === 'KeyM' && !e.repeat) { toggleSound(); return; }
     if (e.code === 'KeyP' && !e.repeat) { takePhoto(); return; }
+    if (e.code === 'KeyC' && !e.repeat && !e.metaKey && !e.ctrlKey) { cycleCam(); return; }
     keys.add(e.code);
-    if (MOVE_KEYS.includes(e.code)) e.preventDefault();
+    if (MOVE_KEYS.includes(e.code)) { e.preventDefault(); setCam('free'); }
   });
   window.addEventListener('keyup', e => keys.delete(e.code));
   window.addEventListener('blur', () => keys.clear());
@@ -1946,7 +2068,218 @@ void main() {
     if (e.target instanceof HTMLElement && e.target.closest('#panel')) return;
     wheelLift -= e.deltaY * 0.01;
     e.preventDefault();
+    setCam('free');
   }, { passive: false });
+
+  // ---------- touch controls ----------
+  // a virtual joystick to move, buttons to rise and dive, and a toggle to go faster
+  const TOUCH = matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 0 && matchMedia('(hover: none)').matches);
+  const joy = { x: 0, y: 0, id: null };
+  let fastLock = false;
+  const stick = document.getElementById('stick'), knob = document.getElementById('knob');
+  function moveStick(e) {
+    const r = stick.getBoundingClientRect(), R = r.width / 2;
+    let x = (e.clientX - r.left - R) / R, y = (e.clientY - r.top - R) / R;
+    const len = Math.hypot(x, y), cl = Math.min(len, 1);
+    if (len > 1) { x /= len; y /= len; }
+    knob.style.transform = `translate(${x * R * 0.62}px, ${y * R * 0.62}px)`;
+    const live = cl > 1e-6 ? Math.max(0, (cl - 0.12) / 0.88) / cl : 0; // a small dead zone in the middle
+    joy.x = x * live; joy.y = -y * live;
+  }
+  function releaseStick() {
+    joy.id = null; joy.x = 0; joy.y = 0;
+    knob.style.transform = '';
+  }
+  stick.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (joy.id !== null) return;
+    joy.id = e.pointerId;
+    stick.setPointerCapture(e.pointerId);
+    setCam('free');
+    moveStick(e);
+  });
+  stick.addEventListener('pointermove', e => { if (e.pointerId === joy.id) moveStick(e); });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    stick.addEventListener(ev, e => { if (e.pointerId === joy.id) releaseStick(); });
+  }
+  // rise / dive hold a virtual E / Q key, so the surface rules are the same as on a keyboard
+  function holdButton(id, code) {
+    const b = document.getElementById(id);
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      b.setPointerCapture(e.pointerId);
+      keys.add(code); b.classList.add('on');
+      setCam('free');
+    });
+    const up = () => { keys.delete(code); b.classList.remove('on'); };
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, up);
+    b.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  holdButton('rise', 'KeyE');
+  holdButton('dive', 'KeyQ');
+  const fastBtn = document.getElementById('fast');
+  fastBtn.addEventListener('click', () => {
+    fastLock = !fastLock;
+    fastBtn.setAttribute('aria-pressed', String(fastLock));
+  });
+  const HINT_KEYS = document.getElementById('hint').textContent;
+  const HINT_TOUCH = 'Joystick to move · drag to look · ▲ ▼ up & down (▼ at the surface to dive) · ⚡ faster · 🎥 camera';
+  function useTouch(on) {
+    if (document.body.classList.contains('touch') === on) return;
+    document.body.classList.toggle('touch', on);
+    document.getElementById('hint').textContent = on ? HINT_TOUCH : HINT_KEYS;
+    if (!on) releaseStick();
+  }
+  useTouch(TOUCH);
+
+  // ---------- camera modes ----------
+  // free flight, riding along behind one of the boats, or a slow automatic tour;
+  // moving yourself always drops back to free flight
+  const CAMS = {
+    free:  { label: 'Free',  icon: '🕹️', title: 'Fly yourself' },
+    // trailing from a three-quarter angle: the boats are drawn for viewing from a distance
+    sloop: { label: 'Sloop', icon: '⛵', title: 'Follow the sailboat', boat: 0, back: 75, up: 6, ahead: 40, orbit: 0.6 },
+    ship:  { label: 'Ship',  icon: '🚢', title: 'Follow the cargo ship', boat: 1, back: 420, up: 30, ahead: 150, orbit: 0.6 },
+    tour:  { label: 'Tour',  icon: '🎬', title: 'A slow flyover: the island, the lighthouse and the boats' },
+  };
+  const CAM_ORDER = Object.keys(CAMS);
+  let camMode = 'free';
+  const follow = { orbit: 0, tilt: 0 };
+  const camBtns = {};
+  for (const name of CAM_ORDER) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="ic">${CAMS[name].icon}</span><span>${CAMS[name].label}</span>`;
+    b.title = CAMS[name].title;
+    b.addEventListener('click', () => setCam(name));
+    document.getElementById('cams').appendChild(b);
+    camBtns[name] = b;
+  }
+  function setCam(mode) {
+    if (mode === camMode) return;
+    camMode = mode;
+    follow.orbit = CAMS[mode].orbit || 0; follow.tilt = 0;
+    if (mode === 'tour') { tour.leg = -1; nextLeg(); }
+    for (const n in camBtns) camBtns[n].setAttribute('aria-pressed', String(camMode === n));
+    const touch = document.body.classList.contains('touch');
+    flashHint(`Camera: ${CAMS[mode].title.toLowerCase()}`
+      + (CAMS[mode].boat !== undefined && !boatsOut() ? ' (the boats stay in port in this weather)' : '')
+      + (mode === 'free' ? '' : touch ? ' · move to take over' : ' · C to switch, move to take over'));
+  }
+  const cycleCam = () => setCam(CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]);
+  camBtns.free.setAttribute('aria-pressed', 'true');
+  document.getElementById('cam').addEventListener('click', e => { e.stopPropagation(); cycleCam(); });
+  // the boat the camera is busy with (followed, or being passed on the tour), which must not be swapped out
+  function heldBoat() {
+    if (CAMS[camMode].boat !== undefined) return boats[CAMS[camMode].boat];
+    if (camMode === 'tour') return TOUR[tour.leg] === 'sloop' ? boats[0] : TOUR[tour.leg] === 'ship' ? boats[1] : null;
+    return null;
+  }
+  const boatsOut = () => S.life * (1 - smooth(15, 21, S.windSpeed)) > 0.2; // as boatAmt, for the chosen weather
+  const wrapRad = a => Math.atan2(Math.sin(a), Math.cos(a));
+  // turn the view smoothly toward a point
+  function lookToward(x, y, z, k, pitchBias = 0) {
+    const dx = x - pos.x, dy = y - pos.y, dz = z - pos.z;
+    tYaw += wrapRad(Math.atan2(dx, dz) - tYaw) * k;
+    const p = Math.max(-1.2, Math.min(0.5, Math.atan2(dy, Math.hypot(dx, dz)) + pitchBias));
+    tPitch += (p - tPitch) * k;
+  }
+  function followStep(dt, minY) {
+    const c = CAMS[camMode], b = boats[c.boat];
+    const hx = Math.cos(b.hd), hz = Math.sin(b.hd);
+    const ca = Math.cos(follow.orbit), sa = Math.sin(follow.orbit);
+    const bx = -hx * ca + hz * sa, bz = -hz * ca - hx * sa; // "behind", swung round by dragging
+    const back = c.back * (1 - follow.tilt * 0.3);
+    const gx = b.x + bx * back, gz = b.z + bz * back;
+    const gy = Math.max(minY + 1, c.up + follow.tilt * c.back * 0.8);
+    // trail the boat closely; from far away, swoop in at a capped speed
+    const e = 1 - Math.exp(-dt * 1.5);
+    let mx = (gx - pos.x) * e, my = (gy - pos.y) * e, mz = (gz - pos.z) * e;
+    const len = Math.hypot(mx, my, mz), cap = 260 * dt;
+    if (len > cap) { mx *= cap / len; my *= cap / len; mz *= cap / len; }
+    pos.x += mx; pos.y += my; pos.z += mz;
+    vel.x = mx / dt; vel.y = my / dt; vel.z = mz / dt;
+    lookToward(b.x + hx * c.ahead, c.up * 0.15, b.z + hz * c.ahead, 1 - Math.exp(-dt * 3));
+  }
+
+  // the tour: a loop of legs, each flying to a sight and lingering there for a while
+  const TOUR = ['sea', 'sloop', 'island', 'lighthouse', 'ship'];
+  const LIGHT = { x: -418, z: 1253 };
+  const tour = { leg: -1, t: 0, total: 0, arrived: false, a: 0, side: 1, dir: 0, x: 0, z: 0 };
+  function nextLeg() {
+    for (let i = 0; i < TOUR.length; i++) {
+      tour.leg = (tour.leg + 1) % TOUR.length;
+      const kind = TOUR[tour.leg];
+      if (!((kind === 'sloop' || kind === 'ship') && !boatsOut())) break; // no boats out in this weather
+    }
+    tour.t = 0; tour.total = 0; tour.arrived = false;
+    tour.side = Math.random() < 0.5 ? -1 : 1;
+    tour.dir = yaw; tour.x = pos.x; tour.z = pos.z;
+    tour.a = Math.atan2(pos.z - ISLE.z, pos.x - ISLE.x);
+  }
+  function tourStep(dt, minY) {
+    const kind = TOUR[tour.leg], t = tour.t;
+    let gx, gy, gz, lx, ly, lz, dwell;
+    if (kind === 'sea') {
+      // drift low over open water, rising and dipping with a lazy turn
+      dwell = 26;
+      tour.dir += dt * 0.025 * tour.side;
+      tour.x += Math.sin(tour.dir) * 8 * dt; tour.z += Math.cos(tour.dir) * 8 * dt;
+      gx = tour.x; gz = tour.z; gy = 3 + 2.5 * (1 - Math.cos(t * 0.3));
+      lx = gx + Math.sin(tour.dir) * 120; lz = gz + Math.cos(tour.dir) * 120; ly = gy * 0.5;
+      tour.arrived = true;
+    } else if (kind === 'sloop' || kind === 'ship') {
+      // slide past the boat, from astern to ahead of her, at a respectful distance
+      const ship = kind === 'ship', b = boats[ship ? 1 : 0];
+      dwell = ship ? 40 : 32;
+      const hx = Math.cos(b.hd), hz = Math.sin(b.hd);
+      const off = ship ? 230 : 45, span = ship ? 320 : 110;
+      const along = -span + 2 * span * Math.min(1, t / dwell);
+      gx = b.x - hz * off * tour.side + hx * along;
+      gz = b.z + hx * off * tour.side + hz * along;
+      gy = ship ? 24 + 8 * Math.sin(t * 0.15) : 5 + 2 * Math.sin(t * 0.25);
+      lx = b.x; lz = b.z; ly = ship ? 12 : 4;
+    } else if (kind === 'island') {
+      // a wide, slow circle round the island, climbing and sinking
+      dwell = 55;
+      if (tour.arrived) tour.a += dt * 0.035 * tour.side;
+      gx = ISLE.x + Math.cos(tour.a) * 720; gz = ISLE.z + Math.sin(tour.a) * 720;
+      gy = 55 + 25 * Math.sin(t * 0.11);
+      lx = ISLE.x; lz = ISLE.z; ly = 30;
+    } else {
+      // swing round the seaward side of the lighthouse
+      dwell = 30;
+      const base = Math.max(isleHeightJS(LIGHT.x, LIGHT.z), 4);
+      const sea = Math.atan2(LIGHT.z - ISLE.z, LIGHT.x - ISLE.x);
+      const a = sea + tour.side * (-0.7 + 1.4 * Math.min(1, t / dwell));
+      gx = LIGHT.x + Math.cos(a) * 420; gz = LIGHT.z + Math.sin(a) * 420; // off the shore
+      gy = base + 12 + 6 * Math.sin(t * 0.3);
+      lx = LIGHT.x; lz = LIGHT.z; ly = base + 18;
+    }
+    // stay well clear of the land on the way, looking a few seconds ahead
+    const ahead = Math.max(isleHeightJS(pos.x, pos.z), isleHeightJS(pos.x + vel.x * 3, pos.z + vel.z * 3),
+                           isleHeightJS(pos.x + vel.x * 6, pos.z + vel.z * 6));
+    gy = Math.max(gy, minY + 1, ahead > -1 ? ahead + 22 : 0);
+    // ease the velocity (not the position) toward the goal, for unhurried, curving moves
+    const dx = gx - pos.x, dy = gy - pos.y, dz = gz - pos.z, dist = Math.hypot(dx, dz);
+    let wx = dx * 0.4, wy = dy * 0.6, wz = dz * 0.4;
+    const sp = Math.hypot(wx, wz), cap = 45 + 75 * smooth(1500, 4000, dist); // hurry over long empty stretches
+    if (sp > cap) { wx *= cap / sp; wz *= cap / sp; }
+    wy = Math.max(-8, Math.min(12, wy));
+    const e = 1 - Math.exp(-dt * 0.7);
+    vel.x += (wx - vel.x) * e; vel.y += (wy - vel.y) * e; vel.z += (wz - vel.z) * e;
+    pos.x += vel.x * dt; pos.y += vel.y * dt; pos.z += vel.z * dt;
+    // look at the sight once near it; on the way, mostly where we're heading
+    const w = smooth(250, 700, dist), vs = Math.hypot(vel.x, vel.z);
+    if (w > 0 && vs > 1) {
+      const tx = pos.x + vel.x / vs * 200, tz = pos.z + vel.z / vs * 200;
+      lx += (tx - lx) * w; lz += (tz - lz) * w; ly += (pos.y - 25 - ly) * w;
+    }
+    lookToward(lx, ly, lz, 1 - Math.exp(-dt * 1.2));
+    if (!tour.arrived && dist < (kind === 'ship' ? 150 : 90)) tour.arrived = true;
+    if (tour.arrived) tour.t += dt;
+    tour.total += dt;
+    if ((tour.arrived && tour.t > dwell) || tour.total > 150) nextLeg();
+  }
 
   const pos = { x: 0, y: 2.3, z: 0 };
   let underwater = false;
@@ -1992,7 +2325,13 @@ void main() {
   const MAX_Y = 80;
 
   const hint = document.getElementById('hint');
-  setTimeout(() => { hint.style.opacity = '0'; }, 6000);
+  let hintTimer = setTimeout(() => { hint.style.opacity = '0'; }, 6000);
+  function flashHint(text) { // a short message in the hint bubble
+    hint.textContent = text;
+    hint.style.opacity = '1';
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { hint.style.opacity = '0'; }, 3500);
+  }
 
   const fpsEl = document.getElementById('fps');
   let fpsFrames = 0, fpsTime = 0;
@@ -2491,19 +2830,23 @@ void main() {
     const kPeak = 9.5 / (C.windSpeed * C.windSpeed);
     const minY = 0.6 + amp * 2.2;
 
-    const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-    const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    const clamp1 = v => Math.max(-1, Math.min(1, v));
+    const fwd = clamp1((keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + joy.y);
+    const side = clamp1((keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + joy.x);
     const up = (keys.has('KeyE') || keys.has('Space') ? 1 : 0) - (keys.has('KeyQ') ? 1 : 0);
-    const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 18 : 5;
+    const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight') || fastLock) ? 18 : 5;
     const fx = Math.sin(yaw), fz = Math.cos(yaw);   // horizontal forward
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);  // horizontal right
     const ease = 1 - Math.exp(-dt * 4);
-    vel.x += ((fx * fwd + rx * side) * speed - vel.x) * ease;
-    vel.z += ((fz * fwd + rz * side) * speed - vel.z) * ease;
-    vel.y += (up * speed * 0.6 - vel.y) * ease;
-    pos.x += vel.x * dt;
-    pos.z += vel.z * dt;
-    pos.y += vel.y * dt + wheelLift * ease;
+    if (camMode === 'free') {
+      vel.x += ((fx * fwd + rx * side) * speed - vel.x) * ease;
+      vel.z += ((fz * fwd + rz * side) * speed - vel.z) * ease;
+      vel.y += (up * speed * 0.6 - vel.y) * ease;
+      pos.x += vel.x * dt;
+      pos.z += vel.z * dt;
+      pos.y += vel.y * dt + wheelLift * ease;
+    } else if (camMode === 'tour') tourStep(dt, minY);
+    else followStep(dt, minY);
     wheelLift -= wheelLift * ease;
     // the surface is a one-way door: pass straight through the wave band, stop above the sand
     const below = 0.5 + amp * 1.6;
@@ -2574,11 +2917,22 @@ void main() {
     boatAmt = C.life * (1 - smooth(15, 21, C.windSpeed));
     birdAmt = C.life * smooth(0, 8, C.sunElev) * (1 - smooth(0.25, 0.6, C.rain + C.snow + C.hail + C.dust))
             * (1 - smooth(13, 19, C.windSpeed)) * (1 - C.fog * 0.7);
+    const held = heldBoat();
     for (const b of boats) {
       b.x += Math.cos(b.hd) * b.speed * dt;
       b.z += Math.sin(b.hd) * b.speed * dt;
       const d = Math.hypot(b.x - pos.x, b.z - pos.z);
-      if (d > b.dist * 2.5 || d < 200 || Math.hypot(b.x + 500, b.z - 1500) < 650) placeBoat(b);
+      if (b === held) {
+        // the camera's boat is never swapped out: she bears away from the island instead
+        b.near = true;
+        const ix = b.x - ISLE.x, iz = b.z - ISLE.z, di = Math.hypot(ix, iz);
+        if (di < 1300 && Math.cos(b.hd) * ix + Math.sin(b.hd) * iz < 0.5 * di) {
+          b.hd += wrapRad(Math.atan2(iz, ix) - b.hd) * Math.min(1, dt * 0.15);
+        }
+        continue;
+      }
+      if (b.near && d > 260) b.near = false; // just let go by the camera: no popping out of sight
+      if (d > b.dist * 2.5 || (d < 200 && !b.near) || Math.hypot(b.x + 500, b.z - 1500) < 650) placeBoat(b);
     }
     const fe = 1 - Math.exp(-dt * 0.15);
     flockX += (pos.x + Math.sin(yaw) * 90 - flockX) * fe;
