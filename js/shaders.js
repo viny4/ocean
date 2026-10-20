@@ -2007,9 +2007,8 @@ void wildlife(vec3 ro, vec3 rd, vec3 horizon, inout vec3 col, inout float hitT) 
 }
 
 // ---------- what the sea mirrors ----------
-// the island and lighthouse seen along a reflected ray: a coarse march of the island and the
-// cheap cut-out tower. a is how much of the sky behind they hide. (The boats are left out:
-// a third and fourth copy of their code costs a lot on the GPU for a few far-off pixels.)
+// the island, lighthouse and boats seen along a reflected ray: a coarse march of the island
+// and the cheap cut-outs for the rest. a is how much of the sky behind they hide.
 vec4 mirrorScene(vec3 p, vec3 rf, vec3 haze, float hb) {
   vec4 m = vec4(0.0);
   float tM = 1e5, tH;
@@ -2017,6 +2016,10 @@ vec4 mirrorScene(vec3 p, vec3 rf, vec3 haze, float hb) {
   if (h.a > 0.0) { m = h; tM = tH; }
   h = lighthouse(p, rf, haze, hb, tH);
   if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
+  h = boat(p, rf, uBoatA, haze, tH);
+  if (h.a > 0.0 && tH < tM) { m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a)); if (h.a > 0.5) tM = tH; }
+  h = boat(p, rf, uBoatB, haze, tH);
+  if (h.a > 0.0 && tH < tM) m = vec4(mix(m.rgb, h.rgb, h.a), max(m.a, h.a));
   return m;
 }
 
