@@ -215,6 +215,10 @@ uniform vec4  uBoatA;   // sailboat x, z, heading, type
 uniform vec4  uBoatB;   // cargo ship x, z, heading, type
 uniform vec4  uBirds[6]; // seagull x, y, z, wing pose
 uniform vec2  uLife;    // boats visible, gulls visible
+uniform vec4  uDolphin; // dolphin pod x, z, heading, event clock (s, < 0 when none)
+uniform vec4  uWhale;   // whale x, z, heading, event clock (s, < 0 when none)
+uniform vec4  uShark;   // shark fin x, z, heading, how far the fin is up
+uniform vec4  uFauna;   // dolphins in the pod, whale breaches (0) or blows (1), wildlife amount
 uniform vec4  uMoon;    // real moon direction, 1 when the real sky is on
 uniform vec3  uMoonSun; // true sun direction (unclamped) for lighting the moon's phase
 uniform mat3  uSkyRot;  // local sky -> celestial (equatorial) frame, turns the stars with the earth
@@ -969,6 +973,11 @@ float floorDepth(vec2 p) {
   return d * uWater.z;
 }
 
+// the same bottom without the dunes and ripples: half the cost, never more than 0.3 m off
+float floorBase(vec2 p) {
+  return (mix(1.0, 9.0, smoothstep(0.40, 0.66, fbm(p * 0.03 + 7.0))) + 0.3) * uWater.z;
+}
+
 float causticLayer(vec2 uv, float t) {
   vec2 p = mod(uv * 6.2832, 6.2832) - 250.0;
   vec2 i = p;
@@ -993,6 +1002,324 @@ vec3 seaFloor(vec2 p, float depth, float dist) {
   float c = causticLayer(p * 0.45, t) * 0.6 + causticLayer(p * 0.31 + 0.37, t * 0.8) * 0.4;
   c *= exp(-depth * 0.12) * (1.0 - smoothstep(25.0, 70.0, dist)) * smoothstep(0.0, 0.3, SUN.y);
   return sand * (0.62 + 1.7 * c);
+}
+
+// ---------- creatures: small blended-ellipsoid SDFs ----------
+// Each animal is built in its own frame (x to its side, y up, z forward) and ray-marched only
+// inside a bounding sphere, so the pixels that miss it pay one ray-sphere test.
+float sdEll(vec3 p, vec3 r) {
+  float k0 = length(p / r), k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / max(k1, 1e-6);
+}
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+float sdCap(vec3 p, vec3 a, vec3 b, float r) {
+  vec3 pa = p - a, ba = b - a;
+  return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)) - r;
+}
+
+// a bottlenose dolphin, 2.3 m, its flukes beating up and down with w
+float dolphinSDF(vec3 p, float w) {
+  vec3 q = p;
+  q.y -= sin(w) * 0.12 * pow(max(-p.z - 0.2, 0.0), 2.0);
+  float d = sdEll(q - vec3(0.0, 0.0, 0.15), vec3(0.21, 0.24, 0.85));
+  d = smin(d, sdEll(q - vec3(0.0, 0.02, -0.65), vec3(0.08, 0.14, 0.58)), 0.12);
+  d = smin(d, sdCap(q, vec3(0.0, -0.05, 0.85), vec3(0.0, -0.06, 1.12), 0.045), 0.08);  // beak
+  vec3 f = q - vec3(0.0, 0.3, -0.08);                                                 // raked dorsal fin
+  f.z += f.y * 0.9;
+  d = smin(d, sdEll(f, vec3(0.025, 0.15, 0.12)), 0.05);
+  vec3 k = q - vec3(0.0, 0.0, -1.15);                                                 // swept flukes
+  k.z += abs(k.x) * 0.45;
+  d = smin(d, sdEll(k, vec3(0.32, 0.025, 0.1)), 0.04);
+  vec3 s = q - vec3(0.0, -0.13, 0.45);                                                // flippers
+  s.x = abs(s.x) - 0.2;
+  s.y += s.x * 0.6;
+  s.z += s.x * 0.5;
+  return smin(d, sdEll(s, vec3(0.15, 0.02, 0.07)), 0.04);
+}
+
+// a humpback whale, 14 m, with its long white flippers
+float whaleSDF(vec3 p, float w) {
+  vec3 q = p;
+  q.y -= sin(w) * 0.5 * pow(max(-p.z - 2.0, 0.0) / 5.0, 2.0);
+  float d = sdEll(q - vec3(0.0, 0.0, 1.0), vec3(1.6, 1.7, 5.0));
+  d = smin(d, sdEll(q - vec3(0.0, 0.25, -3.8), vec3(0.6, 1.0, 3.4)), 1.0);
+  d = smin(d, sdEll(q - vec3(0.0, 1.35, -2.6), vec3(0.14, 0.4, 0.6)), 0.3);         // small dorsal hump
+  vec3 k = q - vec3(0.0, 0.25, -7.0);                                                 // flukes
+  k.z += abs(k.x) * 0.35;
+  d = smin(d, sdEll(k, vec3(2.3, 0.15, 0.75)), 0.4);
+  vec3 s = q - vec3(0.0, -0.8, 2.3);                                                  // flippers, a third of its length
+  s.x = abs(s.x) - 2.0;
+  s.z += s.x * 0.55;
+  s.y += s.x * 0.35;
+  return smin(d, sdEll(s, vec3(2.0, 0.13, 0.42)), 0.4);
+}
+
+// what shows of a shark: the dorsal fin cutting the water and the tip of the tail swinging behind
+float sharkSDF(vec3 p, float w) {
+  vec3 f = p - vec3(0.0, 0.0, 0.8);
+  float h = clamp(f.y / 0.55, 0.0, 1.0);
+  float lead = 0.3 - 0.5 * h, trail = -0.32 + 0.12 * h * h;  // swept leading edge, curved trailing edge
+  float plan = max(max(f.z - lead, trail - f.z) * 0.75, max(-f.y - 0.6, f.y - 0.55));
+  float d = max(plan, abs(f.x) - 0.035 * (1.0 - h) - 0.006);
+  vec3 t = p - vec3(sin(w) * 0.18, 0.0, -0.9);
+  float ht = clamp(t.y / 0.35, 0.0, 1.0);
+  float planT = max(max(t.z - (0.1 - 0.35 * ht), (-0.12 - 0.3 * ht) - t.z) * 0.75, max(-t.y - 0.6, t.y - 0.35));
+  return min(d, max(planT, abs(t.x) - 0.025 * (1.0 - ht) - 0.005));
+}
+
+// a manta ray, 4 m across, its wings rippling in slow beats
+float mantaSDF(vec3 p, float w) {
+  float ax = abs(p.x);
+  p.y -= sin(w - ax * 0.9) * 0.16 * ax * ax;
+  float zc = p.z + 0.12 * ax * ax;                                 // wings curving back to the tips
+  float lead = (1.2 * ax + 2.1 * (zc - 0.9)) / 2.42;               // leading edge
+  float trail = (0.6 * (ax - 2.1) - 1.8 * (zc + 0.3)) / 1.9;      // trailing edge back to the tail
+  float plan = max(lead, trail) * 0.8;
+  float th = 0.1 * pow(max(1.0 - ax / 2.2, 0.0), 1.5) + 0.01 + 0.09 * exp(-ax * ax * 6.0);
+  vec2 e = vec2(plan, abs(p.y) - th);
+  float d = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0);
+  vec3 c = p - vec3(0.0, 0.0, 0.95);                                // the two horn-like head fins
+  c.x = abs(c.x) - 0.32;
+  d = min(d, sdEll(c, vec3(0.06, 0.04, 0.2)));
+  return min(d, sdCap(p, vec3(0.0, 0.0, -0.6), vec3(0.0, 0.05, -1.9), 0.02));
+}
+
+// a green sea turtle, 1.2 m, rowing with its long front flippers
+float turtleSDF(vec3 p, float w) {
+  float d = sdEll(p, vec3(0.42, 0.17, 0.55));
+  d = smin(d, sdEll(p - vec3(0.0, -0.02, 0.62), vec3(0.11, 0.09, 0.15)), 0.08);
+  vec3 f = p - vec3(0.0, -0.03, 0.25);
+  f.x = abs(f.x) - 0.42;
+  f.y -= f.x * sin(w) * 0.45;
+  f.z += f.x * (0.6 + 0.25 * cos(w));
+  d = smin(d, sdEll(f, vec3(0.36, 0.028, 0.09)), 0.05);
+  vec3 r = p - vec3(0.0, -0.04, -0.45);
+  r.x = abs(r.x) - 0.22;
+  r.z += r.x * 0.6;
+  return smin(d, sdEll(r, vec3(0.13, 0.025, 0.08)), 0.04);
+}
+
+float creatureSDF(vec3 p, int kind, float w) {
+  if (kind == 0) return dolphinSDF(p, w);
+  if (kind == 1) return whaleSDF(p, w);
+  if (kind == 2) return sharkSDF(p, w);
+  if (kind == 3) return mantaSDF(p, w);
+  return turtleSDF(p, w);
+}
+
+// the creature's frame: side, up and forward axes for a heading (radians, 0 along +x),
+// a pitch (nose up) and a roll
+mat3 creatureBasis(float hd, float pitch, float roll) {
+  vec3 Z = vec3(cos(hd) * cos(pitch), sin(pitch), sin(hd) * cos(pitch));
+  vec3 X = vec3(-sin(hd), 0.0, cos(hd));
+  vec3 Y = cross(X, Z);
+  return mat3(X * cos(roll) + Y * sin(roll), Y * cos(roll) - X * sin(roll), Z);
+}
+
+// march one creature inside its bounding sphere (centre C, radius R, frame B). Returns the
+// distance along the ray (1e5 for a miss) with the pixel's coverage, so silhouettes stay smooth,
+// and the closest point and normal in the creature's own frame.
+float marchCreature(vec3 ro, vec3 rd, vec3 C, mat3 B, float R, int kind, float w, float maxT,
+                    out float cov, out vec3 lp, out vec3 nl) {
+  cov = 0.0;
+  vec3 oc = ro - C;
+  float b = dot(oc, rd);
+  float h = b * b - dot(oc, oc) + R * R;
+  if (h < 0.0) return 1e5;
+  h = sqrt(h);
+  float t = max(-b - h, 0.05), t1 = min(-b + h, maxT);
+  if (t >= t1) return 1e5;
+  vec3 lo = oc * B, ld = rd * B;   // into the creature's frame
+  float best = 1e5, bt = t;
+  for (int i = 0; i < 36; i++) {
+    vec3 q = lo + ld * t;
+    float d = creatureSDF(q, kind, w);
+    float r = d / (PX * t);
+    if (r < best) { best = r; bt = t; lp = q; }
+    if (r < 0.3) break;
+    t += d * 0.8;
+    if (t > t1) break;
+  }
+  cov = smoothstep(1.3, 0.3, best);
+  if (cov <= 0.0 || bt > maxT) { cov = 0.0; return 1e5; }
+  float e = 0.004 * R;
+  nl = vec3(0.0);
+  for (int k = 0; k < 4; k++) {
+    vec3 s = k == 0 ? vec3(1.0, -1.0, -1.0) : k == 1 ? vec3(-1.0, -1.0, 1.0) : k == 2 ? vec3(-1.0, 1.0, -1.0) : vec3(1.0);
+    nl += s * creatureSDF(lp + s * e, kind, w);
+  }
+  nl = normalize(nl);
+  return bt;
+}
+
+// ---------- the reef: coral heads, rocks and kelp ----------
+// coral in pinks, oranges, purples, yellows and greens, or a plain rock, lit by its normal
+vec3 reefColour(vec3 p, vec2 c, vec3 n) {
+  vec2 q = vec2(p.x + p.y, p.z - p.y);
+  float k = hash(c + 23.0);
+  vec3 cc = k < 0.18 ? vec3(1.3, 0.3, 0.5) : k < 0.34 ? vec3(1.35, 0.55, 0.12) : k < 0.48 ? vec3(0.75, 0.25, 1.0)
+          : k < 0.6 ? vec3(1.25, 1.05, 0.2) : k < 0.72 ? vec3(0.25, 0.95, 0.55) : vec3(0.5, 0.47, 0.42);
+  if (k < 0.72) {
+    // brain-coral grooves on some heads, polyp speckle on the rest
+    float g = hash(c + 31.0) < 0.5 ? smoothstep(-0.4, 0.4, sin(noise(q * 4.0 + k * 9.0) * 22.0))
+                                   : smoothstep(0.55, 0.75, noise(q * 22.0));
+    cc *= 0.72 + 0.35 * g;
+  } else {
+    cc *= 0.65 + 0.5 * noise(q * 7.0);
+    cc = mix(cc, vec3(0.28, 0.4, 0.22), smoothstep(0.5, 0.8, noise(q * 3.0 + 2.0)) * 0.6 * max(n.y, 0.0));  // algae on top
+  }
+  return cc * (0.35 + 0.65 * max(dot(n, normalize(vec3(SUN.x, max(SUN.y, 0.4), SUN.z))), 0.0));
+}
+
+// The reef is laid out on a 3 m grid: a cell may hold a coral head or rock (one or two
+// half-buried ellipsoids, hit exactly) and a kelp stalk, tall fronds swaying up from the sand in
+// patchy forests. The ray walks the cells it crosses, nearest first, and draws each stalk as a
+// ribbon facing the camera, so a pixel pays a few cheap tests per cell and the walk stops at the
+// first solid hit or the sand.
+vec4 reefAndKelp(vec3 ro, vec3 rd, float maxT, float shift, float t, vec3 light, vec3 waterCol, vec3 absorb, vec3 ext) {
+  const float CS = 3.0;
+  vec4 acc = vec4(0.0);
+  vec2 dxz = rd.xz;
+  if (dot(dxz, dxz) < 0.01) return acc;
+  dxz = vec2(abs(dxz.x) < 1e-4 ? 1e-4 : dxz.x, abs(dxz.y) < 1e-4 ? 1e-4 : dxz.y);
+  vec2 cell = floor(ro.xz / CS);
+  vec2 stp = sign(dxz);
+  vec2 tDelta = abs(CS / dxz);
+  vec2 tMax = ((cell + max(stp, 0.0)) * CS - ro.xz) / dxz;
+  vec2 perp = normalize(vec2(-dxz.y, dxz.x));
+  float lim = min(maxT, 32.0), tEnter = 0.0;
+  for (int i = 0; i < 16; i++) {
+    if (tEnter > lim || acc.a > 0.97) break;
+    float tR = maxT, covR = 0.0;
+    vec3 rc = vec3(0.0);
+    if (hash(cell + 17.3) < smoothstep(0.4, 0.68, noise(cell * 0.17 + 4.0)) * 0.75) {
+      for (int k = 0; k < 2; k++) {
+        float fk = float(k);
+        if (k == 1 && hash(cell + 12.9) < 0.4) break;
+        vec2 o = (cell + 0.2 + 0.6 * vec2(hash(cell + 3.1 + fk), hash(cell + 5.7 + fk))) * CS;
+        float r = (0.55 + 0.6 * hash(cell + 9.2 + fk)) * (1.0 - 0.4 * fk);
+        float tall = hash(cell + 1.3 + fk);   // low domes and boulders, a few tall pillars
+        vec3 rr = vec3(r, r * (tall > 0.8 ? 1.25 : 0.5 + 0.5 * tall), r * (0.75 + 0.5 * hash(cell + 2.9 + fk)));
+        if (tall > 0.8) rr.xz *= 0.7;
+        float fb = floorBase(o);
+        if (fb > 6.0 * uWater.z) break;                    // coral keeps to the shallows, not the channels
+        vec3 c = vec3(o.x, -fb - shift, o.y);             // sunk a little into the sand
+        vec3 oc = (ro - c) / rr, dd = rd / rr;
+        float a = dot(dd, dd), b = dot(oc, dd), c2 = dot(oc, oc);
+        float th = (-b - sqrt(max(b * b - a * (c2 - 1.0), 0.0))) / a;
+        float cv = clamp((1.0 - sqrt(max(c2 - b * b / a, 0.0))) * r / (PX * max(th, 0.1)) + 0.5, 0.0, 1.0);
+        if (cv > 0.0 && th > 0.2 && th < tR) {
+          vec3 hp = ro + rd * th;
+          vec3 n = normalize((hp - c) / (rr * rr));
+          n = normalize(n + 0.45 * vec3(noise(hp.xz * 7.0 + hp.y) - 0.5, 0.0, noise(hp.zx * 7.0 - hp.y) - 0.5));
+          vec3 cc = reefColour(hp, cell + fk * 7.0, n) * (0.55 + 0.45 * smoothstep(c.y, c.y + rr.y, hp.y));
+          // coral keeps more of its colour than the sand: the eye adapts to the blue
+          cc *= light * exp(-absorb * max(-hp.y, 0.0) * 0.2);
+          vec3 T = exp(-mix(ext, vec3(ext.b), 0.8) * th);
+          rc = cc * T + waterCol * (1.0 - T);
+          tR = th;
+          covR = cv;
+        }
+      }
+    }
+    float hc = hash(cell + 41.7);
+    if (hc < smoothstep(0.48, 0.72, noise(cell * 0.11 + 5.0)) * 0.6) {
+      vec2 base = (cell + 0.25 + 0.5 * vec2(hash(cell + 3.3), hash(cell + 8.1))) * CS;
+      float fd = floorBase(base) + shift;
+      float H = min(fd - 0.7, fd * (0.55 + 0.4 * hash(cell + 2.2)));
+      if (H > 0.8) {
+        float ph = hc * 40.0;
+        // leaning with the current, swaying back and forth
+        vec2 sway = (vec2(0.5, 0.25) * (0.6 + 0.5 * sin(t * 0.45 + ph)) + vec2(sin(t * 0.8 + ph), cos(t * 0.6 + ph)) * 0.2) * H * 0.18;
+        vec2 b = base;
+        float tc = 0.0;
+        for (int k = 0; k < 2; k++) {
+          tc = dot(b - ro.xz, dxz) / dot(dxz, dxz);           // closest approach to the stalk
+          float s = clamp((ro.y + rd.y * tc + fd) / H, 0.0, 1.0);
+          b = base + sway * s * s;                             // it bends most near the top
+        }
+        float yy = ro.y + rd.y * tc + fd;                      // height above the root
+        float lat = dot(b - ro.xz, perp);
+        // a thin stipe with long blades sprouting off it, alternating sides, fluttering
+        float off = 0.06 * sin(yy * 1.7 + ph + t * 0.8);
+        float bp = yy / 0.5 + ph;
+        float bf = fract(bp);
+        float side = mod(floor(bp), 2.0) * 2.0 - 1.0;
+        float bw = 0.075 * sin(3.1416 * bf) * smoothstep(0.2, 0.7, yy) * (0.8 + 0.4 * sin(t * 1.4 + bp));
+        float rel = lat - off - side * (bw + 0.01);
+        float sdf = max(min(abs(lat - off) - 0.018, abs(rel) - bw), max(-yy, yy - H - 0.25 * bf));
+        float cov = clamp(0.5 - sdf / (PX * tc), 0.0, 1.0) * step(0.2, tc) * step(tc, tR);
+        if (cov > 0.0) {
+          float s = yy / H;
+          vec3 kc = mix(vec3(0.16, 0.19, 0.045), vec3(0.3, 0.25, 0.07), hash(cell + 6.6));
+          kc *= 0.7 + 0.5 * clamp(1.0 - abs(rel) / max(bw, 0.02), 0.0, 1.0) * (0.8 + 0.4 * noise(vec2(rel * 60.0, yy * 4.0)));
+          kc *= light * (0.25 + 0.55 * s) + waterCol * 0.5;
+          kc += light * vec3(0.25, 0.32, 0.05) * pow(max(rd.y, 0.0), 2.0) * 0.6;   // sunlight glowing through
+          vec3 T = exp(-ext * tc);
+          kc = kc * T + waterCol * (1.0 - T);
+          acc.rgb += (1.0 - acc.a) * cov * kc;
+          acc.a += (1.0 - acc.a) * cov;
+        }
+      }
+    }
+    acc.rgb += (1.0 - acc.a) * covR * rc;
+    acc.a += (1.0 - acc.a) * covR;
+    if (tMax.x < tMax.y) { tEnter = tMax.x; tMax.x += tDelta.x; cell.x += stp.x; }
+    else { tEnter = tMax.y; tMax.y += tDelta.y; cell.y += stp.y; }
+  }
+  return acc;
+}
+
+// big gliders keeping the diver company: two manta rays flying wide slow circles, one above and
+// one below, and a sea turtle paddling round closer in
+vec4 seaGliders(vec3 ro, vec3 rd, float t, float maxT, vec3 light, vec3 waterCol, vec3 ext, out float tHit) {
+  tHit = 1e5;
+  if (uFauna.w < 0.01) return vec4(0.0);
+  float bestC = 0.0;
+  vec3 bestP = vec3(0.0), bestN = vec3(0.0, 1.0, 0.0);
+  mat3 bestB = mat3(1.0);
+  int bestK = 3;
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    bool turtle = i == 2;
+    float sg = i == 1 ? -1.0 : 1.0;
+    float ca = t * (turtle ? 0.07 : 0.045 + 0.012 * fi) * sg + fi * 2.6;
+    float rad = turtle ? 7.5 + 1.5 * sin(t * 0.09) : 12.0 + 4.0 * fi;
+    vec3 C = ro + vec3(cos(ca) * rad, 0.0, sin(ca) * rad);
+    // one manta high, seen from below against the light, one low, banking to show its back
+    C.y = min(ro.y + (turtle ? 0.6 : 3.5 - 4.7 * fi) + sin(t * 0.15 + fi * 2.0), turtle ? -1.2 : -1.8);
+    float hd = atan(cos(ca) * sg, -sin(ca) * sg);
+    mat3 B = creatureBasis(hd, 0.06 * cos(t * 0.15 + fi * 2.0), turtle ? 0.0 : -0.35 * sg);
+    int kind = turtle ? 4 : 3;
+    float cv;
+    vec3 lp, nl;
+    float th = marchCreature(ro, rd, C, B, turtle ? 0.95 : 2.4, kind, t * (turtle ? 1.3 : 1.5) + fi * 2.0, maxT, cv, lp, nl);
+    if (cv > 0.0 && th < tHit) { tHit = th; bestC = cv; bestP = lp; bestN = nl; bestB = B; bestK = kind; }
+  }
+  if (bestC <= 0.0) return vec4(0.0);
+  vec3 n = normalize(bestB * bestN);
+  vec3 base;
+  if (bestK == 3) {
+    // dark back with pale shoulder patches, white belly
+    float ax = abs(bestP.x);
+    vec3 back = mix(vec3(0.07, 0.08, 0.1), vec3(0.6, 0.62, 0.62), smoothstep(0.25, 0.1, abs(ax - 0.6) + max(bestP.z - 0.1, -bestP.z - 0.5) * 0.6));
+    base = mix(vec3(0.82, 0.83, 0.82), back, smoothstep(-0.2, 0.2, bestN.y));
+  } else {
+    // a mottled shell of plates over olive skin
+    float shell = sdEll(bestP, vec3(0.42, 0.17, 0.55));
+    vec2 pl = bestP.xz * vec2(6.0, 5.0);
+    float plates = smoothstep(0.0, 0.15, abs(fract(pl.x + 0.5 * floor(pl.y)) - 0.5) * abs(fract(pl.y) - 0.5) * 4.0);
+    vec3 sh = mix(vec3(0.2, 0.15, 0.08), vec3(0.45, 0.33, 0.16), plates * (0.6 + 0.4 * noise(bestP.xz * 9.0)));
+    vec3 skin = vec3(0.42, 0.42, 0.3) * (0.7 + 0.5 * noise(bestP.xz * 20.0));
+    base = mix(sh, skin, smoothstep(0.0, 0.03, shell));
+    base = mix(base, vec3(0.75, 0.68, 0.45), smoothstep(-0.2, -0.6, bestN.y) * step(shell, 0.03));  // pale plastron
+  }
+  vec3 c = base * (light * (0.2 + 0.7 * max(n.y, 0.0) + 0.3 * max(-n.y, 0.0)) + waterCol * 0.9);
+  vec3 T = exp(-ext * tHit);
+  return vec4(c * T + waterCol * (1.0 - T), bestC * clamp(uFauna.w * 2.0, 0.0, 1.0));
 }
 
 // ---------- under the sea ----------
@@ -1127,6 +1454,13 @@ vec3 underwaterView(vec3 ro, vec3 rd, float t) {
     shafts += causticLayer(sp * 0.06, t * 0.35) * exp(-s * 0.09);
   }
   col += light * vec3(0.35, 0.75, 0.8) * shafts * 0.07 * smoothstep(0.0, 0.3, SUN.y);
+
+  // mantas and a turtle, then the coral and kelp in front of them, then the little fish
+  float tG;
+  vec4 gd = seaGliders(ro, rd, t, dist, light, waterCol, ext, tG);
+  col = mix(col, gd.rgb, gd.a);
+  vec4 kelp = reefAndKelp(ro, rd, gd.a > 0.5 ? tG : dist, max(0.0, camDepth + 2.5 - floorDepth(ro.xz)), t, light, waterCol, absorb, ext);
+  col = col * (1.0 - kelp.a) + kelp.rgb;
 
   col = fishSchool(ro, rd, t, dist, col, waterCol, light, ext);
 
@@ -1572,6 +1906,281 @@ void gulls(vec3 ro, vec3 rd, inout vec3 col, inout float hitT) {
   }
 }
 
+// ---------- wildlife at sea: dolphins, a whale, a shark ----------
+// JS starts each event somewhere in front of you and runs its clock; everything else (the leaps,
+// the breach, the splashes) follows from that clock here.
+const float DOLPHIN_DUR = 10.0, LEAP_PERIOD = 2.6, LEAP_AIR = 1.04, POD_SPEED = 7.0;
+
+vec2 podCentre() {
+  return uDolphin.xy + vec2(cos(uDolphin.z), sin(uDolphin.z)) * POD_SPEED * (uDolphin.w - DOLPHIN_DUR * 0.5);
+}
+
+// dolphin i of the pod: where its middle is, its pitch, and its leap clock tau (0 as it breaks
+// the surface, LEAP_AIR as it dives back in). False when it sits this leap out.
+bool dolphin(int i, out vec3 P, out float pitch, out float tau) {
+  float fi = float(i);
+  float T = uDolphin.w;
+  float u = mod(T + hash(vec2(fi, 1.9)) * LEAP_PERIOD, LEAP_PERIOD);
+  float c0 = T - u;                         // when this leap's cycle began
+  tau = u - 0.4;
+  vec2 dir = vec2(cos(uDolphin.z), sin(uDolphin.z));
+  vec2 xz = podCentre() + dir * (hash(vec2(fi, 3.1)) - 0.5) * 5.0 + vec2(-dir.y, dir.x) * (hash(vec2(fi, 7.7)) - 0.5) * 7.0;
+  float vy = 4.9 * LEAP_AIR;
+  P = vec3(xz.x, vy * tau - 4.9 * tau * tau, xz.y);
+  pitch = atan(vy - 9.8 * tau, POD_SPEED);
+  return fi < uFauna.x && T >= 0.0 && c0 >= 0.0 && c0 + LEAP_PERIOD <= DOLPHIN_DUR;
+}
+
+// the whale: kind 0 breaches, bursting steeply out and crashing down on its side; kind 1
+// surfaces to blow twice, rolls its back along the surface and dives showing its flukes.
+// s1, s2: splashes (kind 0) or blows (kind 1) as x, y, z, size, with their ages a1, a2
+void whaleState(out vec3 P, out float pitch, out float roll, out vec4 s1, out float a1, out vec4 s2, out float a2) {
+  float T = uWhale.w;
+  vec2 dir = vec2(cos(uWhale.z), sin(uWhale.z));
+  if (uFauna.y < 0.5) {
+    float tc = max(T - 1.5, 0.0);
+    vec2 xz = uWhale.xy + dir * (3.0 * tc - 3.0);
+    P = vec3(xz.x, -7.0 + 14.0 * tc - 4.9 * tc * tc, xz.y);
+    pitch = mix(1.25, -0.35, smoothstep(0.3, 2.6, tc));
+    roll = 1.6 * smoothstep(0.7, 2.3, tc);
+    vec2 e = uWhale.xy + dir * 0.5, c = uWhale.xy + dir * 4.0;
+    s1 = vec4(e.x, 0.0, e.y, 3.0);
+    a1 = T - 1.5;
+    s2 = vec4(c.x, 0.0, c.y, 7.0);
+    a2 = T - 3.6;
+  } else {
+    float surf = smoothstep(0.5, 3.0, T);
+    float dv = max(T - 7.0, 0.0);
+    vec2 xz = uWhale.xy + dir * (2.0 * T - 12.0);
+    P = vec3(xz.x, mix(-5.0, -1.3, surf) - 1.7 * dv, xz.y);
+    pitch = 0.04 * surf - 1.15 * smoothstep(0.0, 2.2, dv);
+    roll = 0.0;
+    vec2 b1 = uWhale.xy + dir * (6.0 - 12.0 + 3.8), b2 = uWhale.xy + dir * (11.0 - 12.0 + 3.8);  // the blowhole at 3 s and 5.5 s
+    s1 = vec4(b1.x, 0.3, b1.y, 1.0);
+    a1 = T - 3.0;
+    s2 = vec4(b2.x, 0.3, b2.y, 0.8);
+    a2 = T - 5.5;
+  }
+}
+
+// a burst of white water on a camera-facing card standing on the sea: a lumpy column of spray
+// that shoots up, spreads and falls back. size ~ its radius in metres
+vec4 spray(vec3 ro, vec3 rd, vec3 S, float size, float age, out float tS) {
+  tS = 1e5;
+  float life = 0.9 + size * 0.5;
+  float k = age / life;
+  if (k < 0.0 || k > 1.0) return vec4(0.0);
+  vec2 v = S.xz - ro.xz;
+  float D = length(v);
+  vec2 nB = v / D;
+  float den = dot(rd.xz, nB);
+  if (den < 0.05) return vec4(0.0);
+  float t = D / den;
+  vec3 P = ro + rd * t;
+  float lx = dot(P.xz - S.xz, vec2(-nB.y, nB.x));
+  float ly = P.y - S.y;
+  float H = size * 2.3 * sin(min(k * 2.2, 1.0) * 1.5708) * (1.0 - 0.4 * k * k);
+  float spread = size * (0.45 + 0.9 * k);
+  if (abs(lx) > spread * 2.0 + size || ly > H + size || ly < -0.5) return vec4(0.0);
+  float u = clamp(ly / max(H, 1e-3), 0.0, 1.5);
+  float w = spread * (0.4 + 0.8 * u * u);                         // flaring out into a crown
+  float body = smoothstep(w, w * 0.35, abs(lx)) * smoothstep(1.05, 0.6, u);
+  vec2 g = vec2(lx, ly - age * size * 0.7) * 4.0 / size;
+  float n = noise(g) * 0.6 + noise(g * 2.7 + 9.0) * 0.4;
+  float a = body * smoothstep(0.4, 0.65, n + 0.3 * (1.0 - u));
+  // churned white water around the foot
+  float foot = smoothstep(spread * 1.8, spread * 0.5, abs(lx)) * smoothstep(size * 0.55, 0.0, ly);
+  a = max(a, foot * (0.65 + 0.45 * noise(g * 1.7 + 3.0)));
+  a *= pow(1.0 - k, 1.3);
+  float back = max(dot(rd, SUN), 0.0);                             // spray glows with the sun behind it
+  vec3 c = vec3(0.95) * (SKY_AMB * 0.7 + SUN_COL * (0.5 + 0.6 * back * back));
+  tS = t;
+  return vec4(c, clamp(a, 0.0, 1.0));
+}
+
+// a whale's blow: a bushy plume of mist that rises, drifts downwind and thins out
+vec4 blowMist(vec3 ro, vec3 rd, vec3 S, float size, float age, out float tS) {
+  tS = 1e5;
+  if (age < 0.0 || age > 6.0) return vec4(0.0);
+  vec2 v = S.xz - ro.xz;
+  float D = length(v);
+  vec2 nB = v / D;
+  float den = dot(rd.xz, nB);
+  if (den < 0.05) return vec4(0.0);
+  float t = D / den;
+  vec3 P = ro + rd * t;
+  vec2 side = vec2(-nB.y, nB.x);
+  float H = 6.0 * size * (1.0 - exp(-age * 3.0));
+  float ly = P.y - S.y;
+  vec2 wd = vec2(cos(uWave.z), sin(uWave.z));
+  float lx = dot(P.xz - S.xz, side) - dot(wd, side) * ly * 0.12 * age;   // leaning downwind
+  if (ly < 0.0 || ly > H + 3.0 || abs(lx) > 6.0) return vec4(0.0);
+  float w = 0.35 + ly * 0.42 + age * 0.45;                          // a bushy V, widening as it rises
+  float body = exp(-lx * lx / (w * w) * 2.0) * smoothstep(H + 2.0, H * 0.6, ly) * smoothstep(0.0, 0.5, ly);
+  vec2 g = vec2(lx, ly - age * 0.6) * 1.4;
+  float a = body * (0.55 + 0.45 * noise(g) + 0.2 * noise(g * 3.1)) * smoothstep(0.0, 0.25, age) * exp(-age * 0.55) * 0.9;
+  vec3 c = vec3(0.92, 0.94, 0.96) * (SKY_AMB * 0.75 + SUN_COL * (0.45 + 0.5 * pow(max(dot(rd, SUN), 0.0), 4.0)));
+  tS = t;
+  return vec4(c, clamp(a, 0.0, 1.0));
+}
+
+// an expanding ring of foam with a churned middle where something broke the surface
+float foamRing(vec2 d, float age, float size) {
+  float life = 1.6 + size * 0.6;
+  if (age < 0.0 || age > life) return 0.0;
+  float k = age / life;
+  float r = length(d) / size;
+  float R = 0.6 + 1.6 * k;
+  return (exp(-pow((r - R) / 0.28, 2.0)) * 0.8 + exp(-r * r * 2.5) * (1.0 - k)) * (1.0 - k);
+}
+
+// white water on the sea where the animals break the surface, and a shark's wake
+float faunaFoam(vec2 p) {
+  if (uFauna.z < 0.01) return 0.0;
+  float f = 0.0;
+  if (uDolphin.w >= 0.0 && length(p - podCentre()) < 16.0) {
+    vec2 dir = vec2(cos(uDolphin.z), sin(uDolphin.z));
+    for (int i = 0; i < 4; i++) {
+      vec3 P;
+      float pitch, tau;
+      if (!dolphin(i, P, pitch, tau)) continue;
+      f = max(f, foamRing(p - (P.xz - dir * POD_SPEED * tau), tau, 0.7));
+      f = max(f, foamRing(p - (P.xz + dir * POD_SPEED * (LEAP_AIR - tau)), tau - LEAP_AIR, 0.7));
+    }
+  }
+  if (uWhale.w >= 0.0 && length(p - uWhale.xy) < 30.0) {
+    vec3 P;
+    float pitch, roll, a1, a2;
+    vec4 s1, s2;
+    whaleState(P, pitch, roll, s1, a1, s2, a2);
+    if (uFauna.y < 0.5) {
+      f = max(f, foamRing(p - s1.xz, a1, s1.w));
+      f = max(f, foamRing(p - s2.xz, a2, s2.w));
+    } else {
+      // a slick of churned water around the back while it is up, and where the flukes went down
+      vec2 dir = vec2(cos(uWhale.z), sin(uWhale.z));
+      vec2 q = p - P.xz;
+      vec2 lq = vec2(dot(q, dir), dot(q, vec2(-dir.y, dir.x)));
+      f = max(f, smoothstep(1.0, 0.5, length(lq / vec2(7.0, 2.2))) * 0.45 * smoothstep(-2.6, -1.4, P.y));
+      vec2 fl = uWhale.xy + dir * (2.0 * 10.2 - 12.0 - 3.0);
+      f = max(f, foamRing(p - fl, uWhale.w - 10.2, 2.5));
+    }
+  }
+  if (uShark.w > 0.01) {
+    // a V of ripples spreading back from the fin
+    vec2 dir = vec2(cos(uShark.z), sin(uShark.z));
+    vec2 q = p - uShark.xy - dir * 0.8;
+    float along = -dot(q, dir), across = abs(dot(q, vec2(-dir.y, dir.x)));
+    float vee = exp(-pow((across - 0.08 - along * 0.33) / 0.09, 2.0)) * step(-0.3, along) * smoothstep(7.0, 0.0, along);
+    f = max(f, (vee * 0.8 + exp(-dot(q, q) * 8.0) * 0.7) * uShark.w);
+  }
+  return clamp(f * (0.6 + 0.6 * noise(p * 5.0)), 0.0, 1.0);
+}
+
+// wet, shiny hide: sunlight, sky, a glint and a little rim of reflected sky
+vec3 hide(vec3 n, vec3 rd, vec3 base) {
+  float dif = max(dot(n, SUN), 0.0);
+  float spec = pow(max(dot(reflect(rd, n), SUN), 0.0), 40.0);
+  float fres = pow(1.0 - max(dot(n, -rd), 0.0), 4.0);
+  return base * (SUN_COL * dif * 0.9 + SKY_AMB * (0.22 + 0.3 * (0.5 + 0.5 * n.y))) + SUN_COL * spec * 0.7 + SKY_AMB * fres * 0.12;
+}
+
+void wildlife(vec3 ro, vec3 rd, vec3 horizon, inout vec3 col, inout float hitT) {
+  float amt = clamp(uFauna.z * 2.0, 0.0, 1.0);
+  float bestT = 1e5, bestC = 0.0;
+  vec3 bestP = vec3(0.0), bestN = vec3(0.0, 1.0, 0.0);
+  mat3 bestB = mat3(1.0);
+  int bestK = 0;
+  float cv, tt;
+  vec3 lp, nl;
+  vec3 P;
+  float pitch, roll, tau;
+
+  // the pod, inside one sphere around them all first
+  bool podSeen = false;
+  if (uDolphin.w >= 0.0) {
+    vec2 pc = podCentre();
+    vec3 oc = ro - vec3(pc.x, 0.0, pc.y);
+    float b = dot(oc, rd);
+    podSeen = b < 0.0 && b * b - dot(oc, oc) + 120.0 > 0.0;
+  }
+  if (podSeen) {
+    for (int i = 0; i < 4; i++) {
+      if (!dolphin(i, P, pitch, tau) || tau < -0.45 || tau > LEAP_AIR + 0.45) continue;
+      mat3 B = creatureBasis(uDolphin.z, pitch, 0.0);
+      tt = marchCreature(ro, rd, P, B, 1.4, 0, uTime * 9.0 + float(i) * 2.0, hitT, cv, lp, nl);
+      if (cv > 0.0 && tt < bestT) { bestT = tt; bestC = cv; bestP = lp; bestN = nl; bestB = B; bestK = 0; }
+    }
+  }
+  vec4 s1, s2;
+  float a1 = -1.0, a2 = -1.0;
+  if (uWhale.w >= 0.0) {
+    whaleState(P, pitch, roll, s1, a1, s2, a2);
+    if (P.y > -9.5) {
+      mat3 B = creatureBasis(uWhale.z, pitch, roll);
+      tt = marchCreature(ro, rd, P, B, 8.6, 1, uTime * 1.3, hitT, cv, lp, nl);
+      if (cv > 0.0 && tt < bestT) { bestT = tt; bestC = cv; bestP = lp; bestN = nl; bestB = B; bestK = 1; }
+    }
+  }
+  if (uShark.w > 0.01) {
+    P = vec3(uShark.x, -0.15 - (1.0 - uShark.w) * 0.75 + 0.06 * sin(uTime * 0.9), uShark.y);
+    mat3 B = creatureBasis(uShark.z, 0.0, 0.0);
+    tt = marchCreature(ro, rd, P, B, 1.35, 2, uTime * 2.6, hitT, cv, lp, nl);
+    if (cv > 0.0 && tt < bestT) { bestT = tt; bestC = cv; bestP = lp; bestN = nl; bestB = B; bestK = 2; }
+  }
+
+  if (bestC > 0.0) {
+    vec3 n = normalize(bestB * bestN);
+    vec3 base;
+    if (bestK == 0) {
+      // grey back, pale belly
+      base = mix(vec3(0.78, 0.78, 0.76), vec3(0.3, 0.33, 0.38), smoothstep(-0.12, 0.05, bestP.y + 0.04 * bestP.z));
+    } else if (bestK == 1) {
+      // black humpback, white flippers and fluke undersides, grooved pale throat
+      float ax = abs(bestP.x);
+      float white = max(smoothstep(1.4, 2.0, ax) * step(bestP.z, 4.5) * step(bestP.y, -0.2), smoothstep(-0.3, -0.8, bestN.y) * step(bestP.z, -6.0));
+      float throat = smoothstep(-0.6, -1.2, bestP.y) * step(1.5, bestP.z) * (0.6 + 0.4 * step(0.5, fract(bestP.x * 2.5)));
+      base = mix(vec3(0.07, 0.075, 0.09), vec3(0.78, 0.78, 0.76), max(white, throat * 0.7));
+      base *= 0.88 + 0.24 * noise(vec2(bestP.z * 1.3, bestP.y * 1.7 + bestP.x));       // scars and barnacles
+    } else {
+      base = vec3(0.34, 0.37, 0.4) * (1.0 - 0.35 * smoothstep(0.3, 0.55, bestP.y));
+    }
+    vec3 c = hide(n, rd, base);
+    c = mix(c, horizon, 1.0 - exp(-bestT * 0.0022));
+    col = mix(col, c, bestC * amt);
+    if (bestC > 0.5) hitT = bestT;
+  }
+
+  // splashes as they leap out and dive back in, the whale's crash or its blows
+  float tS;
+  vec4 s;
+  if (podSeen) {
+    vec2 dir = vec2(cos(uDolphin.z), sin(uDolphin.z));
+    for (int i = 0; i < 4; i++) {
+      if (!dolphin(i, P, pitch, tau)) continue;
+      vec2 e0 = P.xz - dir * POD_SPEED * tau, e1 = P.xz + dir * POD_SPEED * (LEAP_AIR - tau);
+      s = spray(ro, rd, vec3(e0.x, 0.0, e0.y), 0.55, tau, tS);
+      if (s.a > 0.0 && tS < hitT + 1.0) col = mix(col, s.rgb, s.a * amt);
+      s = spray(ro, rd, vec3(e1.x, 0.0, e1.y), 0.7, tau - LEAP_AIR, tS);
+      if (s.a > 0.0 && tS < hitT + 1.0) col = mix(col, s.rgb, s.a * amt);
+    }
+  }
+  if (uWhale.w >= 0.0) {
+    float haze = 1.0 - exp(-length(uWhale.xy - ro.xz) * 0.0022);
+    if (uFauna.y < 0.5) {
+      s = spray(ro, rd, s1.xyz, s1.w, a1, tS);
+      if (s.a > 0.0 && tS < hitT + 3.0) col = mix(col, mix(s.rgb, horizon, haze), s.a * amt);
+      s = spray(ro, rd, s2.xyz, s2.w, a2, tS);
+      if (s.a > 0.0 && tS < hitT + 8.0) col = mix(col, mix(s.rgb, horizon, haze), s.a * amt);
+    } else {
+      s = blowMist(ro, rd, s1.xyz, s1.w, a1, tS);
+      if (s.a > 0.0 && tS < hitT + 2.0) col = mix(col, mix(s.rgb, horizon, haze), s.a * amt);
+      s = blowMist(ro, rd, s2.xyz, s2.w, a2, tS);
+      if (s.a > 0.0 && tS < hitT + 2.0) col = mix(col, mix(s.rgb, horizon, haze), s.a * amt);
+    }
+  }
+}
+
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
@@ -1815,6 +2424,7 @@ void main() {
       foam = max(foam, clamp(sf * sea * 1.3, 0.0, 1.0) * (1.0 - smoothstep(2000.0, 4500.0, dist)));
     }
     foam = max(foam, splash);
+    foam = max(foam, faunaFoam(p.xz) * clamp(uFauna.z * 2.0, 0.0, 1.0));
     vec3 foamCol = vec3(0.92) * (SUN_COL * max(el, 0.0) * 1.2 * (1.0 - 0.7 * isleSh) + SKY_AMB * 0.55);
     col = mix(col, foamCol, foam);
     col += SUN_COL * spec * (1.0 - foam);
@@ -1872,6 +2482,8 @@ void main() {
   bt = boat(ro, rd, uBoatB, horizon, tB);
   if (bt.a > 0.0 && tB < hitT) { col = mix(col, bt.rgb, bt.a); if (bt.a > 0.5) hitT = tB; }
   gulls(ro, rd, col, hitT);
+  // dolphins, a whale and a shark, now and then
+  if (uFauna.z > 0.01) wildlife(ro, rd, horizon, col, hitT);
 
   // fog, rain haze and sea spray; lightning is bright enough to punch through it
   float fogA = fogAmount(ro, rd, hitT);
@@ -1966,7 +2578,7 @@ void main() {
   const NAMES = ['uRes', 'uTime', 'uLook', 'uPos', 'uSun', 'uWave', 'uWater', 'uSky', 'uWeather', 'uBolt',
                  'uPrecip', 'uSpout', 'uWind', 'uNight', 'uStars', 'uTex', 'uCloudView', 'uCloudRes',
                  'uBoatA', 'uBoatB', 'uBirds', 'uLife', 'uMoon', 'uMoonSun', 'uSkyRot', 'uCat', 'uLines',
-                 'uClimate', 'uBergs'];
+                 'uClimate', 'uBergs', 'uDolphin', 'uWhale', 'uShark', 'uFauna'];
   const vsSrc = document.getElementById('vs').text, fsSrc = document.getElementById('fs').text;
   function program(defines) {
     const p = gl.createProgram();
@@ -2083,7 +2695,7 @@ void main() {
     ['dust',       'Sand / dust',     '',     0,   1,   0.01, 0,    'Weather effects'],
     ['lightning',  'Lightning',       '',     0,   1,   0.01, 0,    'Weather effects'],
     ['spout',      'Waterspout',      '',     0,   1,   0.01, 0,    'Weather effects'],
-    ['life',       'Boats & seagulls', '',    0,   1,   0.01, 1,    'Life & sound'],
+    ['life',       'Boats & wildlife', '',    0,   1,   0.01, 1,    'Life & sound'],
     ['volume',     'Sound volume',    '',     0,   1,   0.01, 0.6,  'Life & sound'],
     ['exposure',   'Exposure',        '',     0.4, 2.5, 0.01, 1.05, 'Image'],
   ];
@@ -3153,6 +3765,28 @@ void main() {
     b.seed = Math.random() * 100;
   }
 
+  // ---------- wildlife ----------
+  // now and then a pod of dolphins leaps past, a whale breaches or blows further out, or a
+  // shark's fin cuts by. Each turns up somewhere in front of you, more often with more life;
+  // the shader plays out each event from its clock (t, -1 when nothing is happening).
+  const DOLPHIN_DUR = 10, WHALE_DUR = 13, SHARK_DUR = 18;
+  const pod = { x: 0, z: 0, hd: 0, t: -1, n: 3, next: 15 + Math.random() * 25 };
+  const whale = { x: 0, z: 0, hd: 0, t: -1, kind: 0, next: 40 + Math.random() * 50 };
+  const shark = { x: 0, z: 0, hd: 0, t: -1, up: 0, seed: 0, next: 30 + Math.random() * 40 };
+  let faunaAmt = 0;
+  // somewhere ahead within the view, clear of the island, heading across it
+  function placeAhead(o, dMin, dMax, spread) {
+    let a;
+    for (let tries = 0; tries < 8; tries++) {
+      a = yaw + (Math.random() - 0.5) * spread;
+      const d = dMin + Math.random() * (dMax - dMin);
+      o.x = pos.x + Math.sin(a) * d;
+      o.z = pos.z + Math.cos(a) * d;
+      if (Math.hypot(o.x - ISLE.x, o.z - ISLE.z) > ISLE.r + 250) break;
+    }
+    o.hd = -a + (Math.random() < 0.5 ? Math.PI : 0) + (Math.random() - 0.5) * 0.6;
+  }
+
   // ---------- sound: all synthesized, no audio files ----------
   const soundBtn = document.getElementById('sound');
   const audio = { ctx: null };
@@ -3541,6 +4175,25 @@ void main() {
     s.connect(f); f.connect(g); g.connect(audio.master);
     s.start(t0); s.stop(t0 + 8);
   }
+  // a whale crashing back down, or its blow, heard across the water a moment later
+  function whaleSound(dist, crash) {
+    if (!audio.ctx) return;
+    const ctx = audio.ctx;
+    const t0 = ctx.currentTime + dist / 340;
+    const s = ctx.createBufferSource();
+    s.buffer = audio.buf; s.loop = true; s.playbackRate.value = crash ? 0.5 : 0.9;
+    const f = ctx.createBiquadFilter();
+    f.type = crash ? 'lowpass' : 'bandpass';
+    f.frequency.setValueAtTime(crash ? 900 : 700, t0);
+    f.frequency.exponentialRampToValueAtTime(crash ? 150 : 400, t0 + (crash ? 2 : 1.2));
+    const g = ctx.createGain();
+    const v = Math.min(0.8, (crash ? 60 : 18) / dist);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v, t0 + (crash ? 0.05 : 0.15));
+    g.gain.setTargetAtTime(0.0001, t0 + (crash ? 0.3 : 0.5), crash ? 0.7 : 0.35);
+    s.connect(f); f.connect(g); g.connect(audio.master);
+    s.start(t0); s.stop(t0 + 4);
+  }
   function markSound() { soundBtn.textContent = S.muted ? '🔇' : '🔊'; }
   function toggleSound() {
     S.muted = !S.muted;
@@ -3707,6 +4360,45 @@ void main() {
       const flap = (b.ph * 0.22) % 1 < 0.35 ? Math.sin(b.ph * 9) * 0.8 + 0.2 : 0.28 + 0.05 * Math.sin(b.ph * 2);
       birdBuf.set([flockX + Math.cos(b.a) * b.r, b.h + Math.sin(b.ph * 0.4) * 4, flockZ + Math.sin(b.a) * b.r, flap], i * 4);
     });
+
+    // wildlife stays away in a gale, and only turns up while you are at the surface to see it
+    faunaAmt = C.life * (1 - smooth(13, 19, C.windSpeed));
+    const spawn = underwater ? 0 : faunaAmt;
+    if (pod.t >= 0) { pod.t += dt; if (pod.t > DOLPHIN_DUR) pod.t = -1; }
+    else if ((pod.next -= dt * spawn) <= 0) {
+      pod.next = 25 + Math.random() * 45;
+      placeAhead(pod, 35, 75, 0.7);
+      pod.n = 2 + Math.floor(Math.random() * 3);
+      pod.t = 0;
+    }
+    if (whale.t >= 0) {
+      const t0 = whale.t, d = Math.hypot(whale.x - pos.x, whale.z - pos.z);
+      whale.t += dt;
+      const at = x => t0 < x && whale.t >= x;
+      if (whale.kind === 0 ? at(3.6) : at(3.0) || at(5.5)) whaleSound(d, whale.kind === 0);
+      if (whale.t > WHALE_DUR) whale.t = -1;
+    } else if ((whale.next -= dt * spawn) <= 0) {
+      whale.next = 50 + Math.random() * 70;
+      placeAhead(whale, 140, 260, 0.8);
+      whale.kind = Math.random() < 0.5 ? 0 : 1;
+      whale.t = 0;
+    }
+    if (shark.t >= 0) {
+      shark.t += dt;
+      shark.hd += Math.sin(shark.t * 0.4 + shark.seed) * 0.25 * dt;   // weaving lazily
+      shark.x += Math.cos(shark.hd) * 2.2 * dt;
+      shark.z += Math.sin(shark.hd) * 2.2 * dt;
+      shark.up = smooth(0, 2, shark.t) * (1 - smooth(SHARK_DUR - 2.5, SHARK_DUR, shark.t));
+      if (shark.t > SHARK_DUR) { shark.t = -1; shark.up = 0; }
+    } else if ((shark.next -= dt * spawn) <= 0) {
+      shark.next = 35 + Math.random() * 50;
+      placeAhead(shark, 22, 45, 0.6);
+      shark.x -= Math.cos(shark.hd) * 20;   // it swims through the spot halfway through
+      shark.z -= Math.sin(shark.hd) * 20;
+      shark.seed = Math.random() * 6;
+      shark.t = 0;
+    }
+
     updateAudio((now - start) / 1000, dt);
 
     cloudT += dt * C.cloudSpeed;
@@ -3734,6 +4426,10 @@ void main() {
       gl.uniform4f(U.uBoatB, boats[1].x, boats[1].z, boats[1].hd, 1);
       gl.uniform4fv(U.uBirds, birdBuf);
       gl.uniform2f(U.uLife, boatAmt, birdAmt);
+      gl.uniform4f(U.uDolphin, pod.x, pod.z, pod.hd, pod.t);
+      gl.uniform4f(U.uWhale, whale.x, whale.z, whale.hd, whale.t);
+      gl.uniform4f(U.uShark, shark.x, shark.z, shark.hd, shark.up);
+      gl.uniform4f(U.uFauna, pod.n, whale.kind, faunaAmt, C.life);
       gl.uniform4f(U.uMoon, real.moon[0], real.moon[1], real.moon[2], real.on ? 1 : 0);
       gl.uniform3f(U.uMoonSun, real.sun[0], real.sun[1], real.sun[2]);
       gl.uniformMatrix3fv(U.uSkyRot, false, real.on ? real.skyRot : skyRot);
