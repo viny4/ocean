@@ -109,6 +109,8 @@
   <div class="presets" id="times"></div>
   <button id="realsky" class="wide" aria-pressed="false" title="Sun, moon and stars where they really are, for your location and time">📍 Real sky now</button>
   <div id="realinfo" hidden></div>
+  <div class="section">Climate</div>
+  <div class="presets" id="climates"></div>
   <div id="sliders"></div>
   <button id="reset" class="wide">Reset to default</button>
 </div>
@@ -145,6 +147,10 @@ uniform vec2  uLife;    // boats visible, gulls visible
 uniform vec4  uMoon;    // real moon direction, 1 when the real sky is on
 uniform vec3  uMoonSun; // true sun direction (unclamped) for lighting the moon's phase
 uniform mat3  uSkyRot;  // local sky -> celestial (equatorial) frame, turns the stars with the earth
+uniform sampler2D uCat;   // star catalogue: each cube-map cell lists its stars, then the stars themselves
+uniform sampler2D uLines; // constellation figures drawn on the six cube faces
+uniform vec4  uClimate;   // tropical, polar, constellation lines
+uniform vec4  uBergs[4];  // icebergs x, z, size, seed
 
 // lighting set up once per pixel in main()
 vec3  SUN;
@@ -287,8 +293,8 @@ vec3 milkyWay(float band, vec2 g) {
   return mix(vec3(0.70, 0.78, 1.0), vec3(1.0, 0.86, 0.68), core) * lum;
 }
 
-// two layers of stars: a few bright ones of every colour, and countless faint ones
-// crowding into the Milky Way
+// two layers of faint background stars, below the real catalogue: a scattering of every
+// colour, and countless fainter ones crowding into the Milky Way
 vec3 starField(vec3 eq, float up, float band, float deep) {
   float face;
   vec2 uv = cubeUV(eq, face);
@@ -304,13 +310,64 @@ vec3 starField(vec3 eq, float up, float band, float deep) {
     if (h1 > dens) continue;
     vec2 o = 0.25 + 0.5 * vec2(h2, h3);
     float d = length(fract(g) - o) / sc;
-    float b = l == 0 ? 0.05 + pow(h4, 40.0) * 6.0 + pow(h4, 6.0) * 0.5 : (0.015 + 0.05 * h4) * deep;
+    float b = l == 0 ? 0.008 + pow(h4, 6.0) * 0.03 : (0.006 + 0.025 * h4) * deep; // fainter than magnitude ~4.3
     float tw = 1.0 + (noise(vec2(h1 * 300.0 + uTime * 5.0, fl)) - 0.5) * (0.35 + 0.9 * low);
     vec3 tint = mix(vec3(1.0, 0.72, 0.5), vec3(1.0, 0.96, 0.9), smoothstep(0.1, 0.4, h5));
     tint = mix(tint, vec3(0.72, 0.82, 1.0), smoothstep(0.7, 0.95, h5));
     acc += tint * b * tw * (exp(-d * d / (PX * PX * 0.6)) + exp(-d / (PX * 2.5)) * 0.05 * step(1.0, b));
   }
   return acc;
+}
+
+// the real bright stars, from the catalogue texture: the cell this direction falls in lists
+// up to six stars whose light reaches it, as 16-bit indices into two rows of star data
+const float CAT_G = 32.0, CAT_W = 576.0, CAT_H = 34.0;
+const float STAR_R = 0.0105; // how far a star's glow may spread (radians); the catalogue is built to match
+float catByte(float v) { return floor(v * 255.0 + 0.5); }
+// B-V colour index to a gentle tint: blue-white B stars, white A, yellow G, orange K and M giants
+vec3 starTint(float bv) {
+  vec3 c = mix(vec3(0.66, 0.77, 1.0), vec3(1.0, 0.98, 0.96), smoothstep(-0.3, 0.35, bv));
+  c = mix(c, vec3(1.0, 0.84, 0.64), smoothstep(0.35, 1.2, bv));
+  return mix(c, vec3(1.0, 0.64, 0.40), smoothstep(1.2, 1.9, bv));
+}
+vec3 catStar(vec2 code, vec3 eq, float low) {
+  float id = catByte(code.x) * 256.0 + catByte(code.y);
+  if (id < 0.5) return vec3(0.0);
+  float u = (id - 0.5) / CAT_W;
+  vec4 a = texture2D(uCat, vec2(u, (CAT_G + 0.5) / CAT_H));
+  vec4 b = texture2D(uCat, vec2(u, (CAT_G + 1.5) / CAT_H));
+  vec3 s = vec3(catByte(a.r) * 256.0 + catByte(a.g), catByte(a.b) * 256.0 + catByte(a.a),
+                catByte(b.r) * 256.0 + catByte(b.g)) / 32767.5 - 1.0;
+  float d = length(eq - normalize(s));
+  if (d > STAR_R) return vec3(0.0);
+  float mag = catByte(b.b) / 30.0 - 2.0;
+  // a gently compressed magnitude scale: Sirius ~3.8, Vega ~1.4, 4th magnitude ~0.09
+  float br = 1.4 * pow(10.0, -0.3 * mag);
+  float tw = 1.0 + (noise(vec2(id * 1.37 + uTime * 5.0, 7.0)) - 0.5) * (0.3 + 0.9 * low);
+  float w = 0.6 + 1.4 * smoothstep(0.3, 3.0, br);              // the brightest look a little bigger
+  float g = exp(-d * d / (PX * PX * w)) + exp(-d / (PX * 2.5)) * 0.06 * smoothstep(0.4, 2.0, br);
+  return starTint(catByte(b.a) / 100.0 - 0.5) * br * tw * g * smoothstep(STAR_R, STAR_R * 0.5, d);
+}
+vec3 realStars(vec3 eq, float up) {
+  float face;
+  vec2 uv = cubeUV(eq, face);
+  vec2 cell = min(floor((uv * 0.5 + 0.5) * CAT_G), CAT_G - 1.0);
+  float x = (face * CAT_G + cell.x) * 3.0 + 0.5, y = (cell.y + 0.5) / CAT_H;
+  vec4 a = texture2D(uCat, vec2(x / CAT_W, y));
+  if (a.r + a.g < 0.5 / 255.0) return vec3(0.0); // most of the sky: no bright star nearby
+  vec4 b = texture2D(uCat, vec2((x + 1.0) / CAT_W, y));
+  vec4 c = texture2D(uCat, vec2((x + 2.0) / CAT_W, y));
+  float low = 1.0 - smoothstep(0.0, 0.35, up);
+  vec3 acc = catStar(a.rg, eq, low) + catStar(a.ba, eq, low);
+  if (b.r + b.g > 0.5 / 255.0) acc += catStar(b.rg, eq, low) + catStar(b.ba, eq, low) + catStar(c.rg, eq, low) + catStar(c.ba, eq, low);
+  return acc;
+}
+// faint stick figures of the constellations, pre-drawn on the cube faces
+float figureLines(vec3 eq) {
+  float face;
+  vec2 uv = cubeUV(eq, face);
+  vec2 tc = (vec2(mod(face, 3.0), floor(face / 3.0)) + clamp(uv * 0.5 + 0.5, 0.001, 0.999)) / vec2(3.0, 2.0);
+  return texture2D(uLines, tc).r;
 }
 
 // satellites gliding silently across; one is the bright space station, and now and then
@@ -391,7 +448,8 @@ vec3 nightSky(vec3 rd) {
   vec3 eq = uSkyRot * rd; // the stars and the Milky Way are fixed to the turning celestial sphere
   vec2 g;
   float band = galaxyBand(eq, g);
-  vec3 c = (milkyWay(band, g) * deep * 0.15 + starField(eq, rd.y, band, deep)) * uStars.y;
+  vec3 c = (milkyWay(band, g) * deep * 0.15 + starField(eq, rd.y, band, deep) + realStars(eq, rd.y)) * uStars.y;
+  if (uClimate.z > 0.01) c += vec3(0.45, 0.6, 1.0) * figureLines(eq) * 0.03 * uClimate.z;
   c += satellites(rd) + meteors(rd);
   return c * dark * smoothstep(0.0, 0.2, rd.y);
 }
@@ -915,10 +973,11 @@ vec3 fishSchool(vec3 ro, vec3 rd, float t, float maxT, vec3 col, vec3 waterCol, 
 // floor with its caustics. In between: blue-green water, shafts of light, drifting specks.
 vec3 underwaterView(vec3 ro, vec3 rd, float t) {
   float murk = uWater.y;
-  vec3 absorb = vec3(0.36, 0.068, 0.045) * murk;
+  vec3 absorb = vec3(0.36, 0.068, 0.045) * murk * mix(1.0, 0.5, uClimate.x);
   vec3 light = SUN_COL * 0.85 * smoothstep(-0.02, 0.4, SUN.y) + SKY_AMB * 0.2 + MOON_COL * 0.5;
   float camDepth = -ro.y;
   vec3 deep = mix(vec3(0.02, 0.26, 0.34), vec3(0.06, 0.24, 0.2), smoothstep(1.0, 3.0, murk) * 0.7);
+  deep = mix(mix(deep, vec3(0.0, 0.36, 0.40), uClimate.x), vec3(0.02, 0.09, 0.13), uClimate.y);
   // the water glows toward the light above and darkens with depth
   vec3 waterCol = deep * (SKY_AMB * 0.45 + light * 0.55) * (0.25 + 1.3 * pow(rd.y * 0.5 + 0.5, 2.0))
                 * exp(-absorb * camDepth * 0.5);
@@ -1063,6 +1122,7 @@ vec4 island(vec3 ro, vec3 rd, vec3 haze, out float tI) {
   grass = mix(grass, vec3(0.09, 0.17, 0.07), smoothstep(0.45, 0.7, noise(p.xz * 0.04 + 9.0)) * 0.85); // stands of trees
   vec3 alb = mix(rock, grass, smoothstep(0.78, 0.9, n.y));
   alb = mix(vec3(0.82, 0.76, 0.6), alb, smoothstep(1.0, 4.0, p.y));      // beach
+  alb = mix(alb, vec3(0.88, 0.91, 0.95), uClimate.y * smoothstep(0.55, 0.8, n.y) * smoothstep(2.0, 8.0, p.y)); // polar snow
   vec3 col = alb * (SKY_AMB * 0.45 * (0.6 + 0.4 * n.y) + SUN_COL * max(dot(n, SUN), 0.0) * 0.95
                     + MOON_COL * max(dot(n, MOON), 0.0) * 0.6);
   // surf breaking along the shore
@@ -1217,6 +1277,69 @@ vec4 boat(vec3 ro, vec3 rd, vec4 B, vec3 haze, out float tB) {
   return vec4(c, a * uLife.x);
 }
 
+// ---------- polar ice ----------
+// an iceberg as a distance field around its centre at the water line: a flat-topped tabular
+// slab with sheer cliffs, or a weathered dome, both roughened by noise
+float bergSDF(vec3 q, vec4 B) {
+  float S = B.z, a = B.w * 2.4;
+  q.xz = mat2(cos(a), sin(a), -sin(a), cos(a)) * q.xz;
+  vec3 r = q * (5.0 / S);
+  float d;
+  if (fract(B.w * 0.137) > 0.5) {
+    vec3 e = abs(q) - vec3(S, S * 0.3, S * 0.62) + 3.0;
+    d = length(max(e, 0.0)) + min(max(e.x, max(e.y, e.z)), 0.0) - 3.0;
+    d += (noise3(vec3(r.xz * 1.5, r.y * 0.3)) - 0.5) * S * 0.16;      // vertical fluting on the cliffs
+  } else {
+    vec3 h = vec3(S, S * 0.5, S * 0.75);
+    d = (length(q / h) - 1.0) * S * 0.5;
+    d += (noise3(r) - 0.5) * S * 0.3;
+  }
+  return d + (noise3(r * 3.1 + 5.0) - 0.5) * S * 0.07;
+}
+// a few icebergs drifting in the polar sea, marched only inside their bounding spheres
+vec4 icebergs(vec3 ro, vec3 rd, vec3 haze, out float tI) {
+  tI = 1e5;
+  if (uClimate.y < 0.01) return vec4(0.0);
+  vec3 col = vec3(0.0);
+  for (int i = 0; i < 4; i++) {
+    vec4 B = uBergs[i];
+    vec3 c = vec3(B.x, sin(uTime * 0.35 + B.w) * 0.3, B.y);   // bobbing slowly on the swell
+    vec3 oc = ro - c;
+    float R = B.z * 1.3;
+    float b = dot(oc, rd), h = b * b - dot(oc, oc) + R * R;
+    if (h < 0.0) continue;
+    h = sqrt(h);
+    float t = max(-b - h, 0.0), t1 = min(-b + h, tI);
+    if (t >= t1 || (ro.y + rd.y * t < -1.0 && rd.y < 0.0)) continue; // missed, or only under water
+    bool hit = false;
+    for (int j = 0; j < 48; j++) {
+      float d = bergSDF(ro + rd * t - c, B);
+      if (d < 0.0015 * t) { hit = true; break; }
+      t += max(d * 0.7, 0.002 * t);
+      if (t > t1) break;
+    }
+    if (!hit) continue;
+    vec3 q = ro + rd * t - c;
+    if (q.y < -0.5) continue;                                 // the sea covers what is under the water line
+    float e = max(0.2, t * 0.002);
+    vec2 k = vec2(1.0, -1.0);
+    vec3 n = normalize(k.xyy * bergSDF(q + k.xyy * e, B) + k.yyx * bergSDF(q + k.yyx * e, B)
+                     + k.yxy * bergSDF(q + k.yxy * e, B) + k.xxx * bergSDF(q + k.xxx * e, B));
+    float dif = max(dot(n, SUN), 0.0);
+    vec3 alb = vec3(0.88, 0.94, 0.98) * (0.9 + 0.1 * noise3(q * 0.4));
+    vec3 c2 = alb * (SUN_COL * dif * 1.25 + SKY_AMB * (0.5 + 0.35 * n.y) * vec3(0.82, 0.92, 1.0)
+                     + MOON_COL * max(dot(n, MOON), 0.0) * 0.6);
+    // dense glacial ice glows blue in the shaded clefts and down by the water
+    float blue = (1.0 - smoothstep(0.0, 0.45, dif)) * 0.3 + (1.0 - smoothstep(0.0, B.z * 0.12, q.y)) * 0.25;
+    c2 = mix(c2, vec3(0.3, 0.66, 0.85) * (SKY_AMB * 0.6 + SUN_COL * 0.3), clamp(blue, 0.0, 1.0));
+    // a lick of surf where the swell washes against it
+    c2 = mix(c2, vec3(0.92) * (SKY_AMB * 0.6 + SUN_COL * 0.6), (1.0 - smoothstep(0.0, 1.0, q.y)) * 0.6);
+    col = mix(c2, haze, 1.0 - exp(-t * 0.00035));
+    tI = t;
+  }
+  return vec4(col, tI < 1e5 ? smoothstep(0.0, 0.6, uClimate.y) : 0.0);
+}
+
 // seagulls: gull-wing silhouettes, flapping in bursts and gliding
 void gulls(vec3 ro, vec3 rd, inout vec3 col, inout float hitT) {
   if (uLife.y < 0.01) return;
@@ -1267,6 +1390,9 @@ void setupLighting() {
   // dust storms turn all the light ochre
   SUN_COL *= mix(vec3(1.0), vec3(1.0, 0.72, 0.45), uPrecip.z);
   SKY_AMB *= mix(vec3(1.0), vec3(1.0, 0.8, 0.58), uPrecip.z * 0.85);
+  // a fierce tropical sun; thin, cold light near the poles
+  SUN_COL *= mix(1.0, 1.2, uClimate.x) * mix(vec3(1.0), vec3(0.93, 0.96, 1.0), uClimate.y);
+  SKY_AMB *= mix(vec3(1.0), vec3(0.9, 0.96, 1.06), uClimate.y);
   // the moon hangs low, roughly opposite the sun
   float mAz = atan(SUN.x, SUN.z) + 2.6;
   MOON = uMoon.w > 0.5 ? uMoon.xyz : normalize(vec3(sin(mAz), 0.22, cos(mAz)));
@@ -1396,12 +1522,21 @@ void main() {
 
     float murk = uWater.y;
     float pathLen = tf + d * 1.15;                 // view path + sunlight path down
-    vec3 absorb = vec3(0.36, 0.068, 0.045) * murk;
+    // tropical water is clearer; the polar sea is dark and hides its bottom
+    vec3 absorb = vec3(0.36, 0.068, 0.045) * murk * mix(1.0, 0.5, uClimate.x) * (1.0 + 4.0 * uClimate.y);
     vec3 T = exp(-absorb * pathLen);
     vec3 deep = mix(vec3(0.0, 0.10, 0.20), vec3(0.02, 0.14, 0.14), smoothstep(1.0, 3.0, murk) * 0.6);
+    deep = mix(deep, vec3(0.0, 0.21, 0.27), uClimate.x);       // warm turquoise
+    deep = mix(deep, vec3(0.015, 0.05, 0.075), uClimate.y);    // dark steel-blue polar sea
     deep *= SKY_AMB * 0.6 + light * 0.4;
     vec3 refr = floorCol * T + deep * (1.0 - T);
     refr = mix(refr, deep * 1.1, smoothstep(40.0, 260.0, dist));
+    // ice reaching out under the water around each berg glows turquoise
+    float ice = 0.0;
+    if (uClimate.y > 0.01) {
+      for (int i = 0; i < 4; i++) ice += exp(-max(length(p.xz - uBergs[i].xy) / uBergs[i].z - 0.75, 0.0) * 6.0);
+      refr = mix(refr, vec3(0.08, 0.42, 0.48) * (SKY_AMB * 0.5 + light * 0.6), min(ice, 1.0) * 0.55 * uClimate.y);
+    }
 
     float cosi = max(dot(n, -rd), 0.0);
     float F = 0.02 + 0.98 * pow(1.0 - cosi, 5.0);
@@ -1435,6 +1570,19 @@ void main() {
     float md = max(dot(rf, MOON), 0.0);
     col += MOON_COL * (pow(md, 1400.0) * 30.0 + pow(md, 120.0) * 0.8) * (1.0 - foam);
 
+    // polar sea: loose plates of snow-covered pack ice drifting downwind, riding the swell
+    if (uClimate.y > 0.01 && dist < 1500.0) {
+      vec2 fq = (p.xz - uWind.xy * 0.03) * 0.14;
+      float fn = noise(fq) * 0.6 + noise(fq * 2.7 + 3.0) * 0.3 + noise(fq * 9.0 + 7.0) * 0.1;
+      float aa = 0.004 + dist * PX * 0.07 / max(-rd.y, 0.03);  // about a pixel, in noise units
+      float floe = smoothstep(0.65 - aa, 0.65 + aa, fn) * uClimate.y * (1.0 - smoothstep(700.0, 1500.0, dist));
+      float rim = smoothstep(0.61, 0.65, fn) * uClimate.y * (1.0 - floe);
+      vec3 snowCol = vec3(0.9, 0.94, 0.98) * (0.92 + 0.08 * noise(p.xz * 1.3))
+                   * (SUN_COL * max(dot(n, SUN), 0.0) * 0.95 + SKY_AMB * 0.75 + MOON_COL * 0.5);
+      col = mix(col, vec3(0.1, 0.45, 0.5) * (SKY_AMB * 0.5 + light * 0.5), rim * 0.35); // ice just under water
+      col = mix(col, snowCol, floe);
+    }
+
     // glowing plankton lights up wherever the water is stirred, after dark
     float bio = uNight.y * (1.0 - DAY);
     if (bio > 0.01) {
@@ -1457,6 +1605,9 @@ void main() {
   float tL;
   vec4 lh = lighthouse(ro, rd, horizon, hb, tL);
   if (lh.a > 0.0 && tL < hitT) { col = mix(col, lh.rgb, lh.a); if (lh.a > 0.5) hitT = tL; }
+  float tG;
+  vec4 berg = icebergs(ro, rd, horizon, tG);
+  if (berg.a > 0.0 && tG < hitT) { col = mix(col, berg.rgb, berg.a); if (berg.a > 0.5) hitT = tG; }
 
   // boats on the sea and gulls overhead, in front of whatever lies behind them
   float tB;
@@ -1558,7 +1709,8 @@ void main() {
   // one shader source, compiled twice: the half-resolution cloud pass and the main scene
   const NAMES = ['uRes', 'uTime', 'uLook', 'uPos', 'uSun', 'uWave', 'uWater', 'uSky', 'uWeather', 'uBolt',
                  'uPrecip', 'uSpout', 'uWind', 'uNight', 'uStars', 'uTex', 'uCloudView', 'uCloudRes',
-                 'uBoatA', 'uBoatB', 'uBirds', 'uLife', 'uMoon', 'uMoonSun', 'uSkyRot'];
+                 'uBoatA', 'uBoatB', 'uBirds', 'uLife', 'uMoon', 'uMoonSun', 'uSkyRot', 'uCat', 'uLines',
+                 'uClimate', 'uBergs'];
   const vsSrc = document.getElementById('vs').text, fsSrc = document.getElementById('fs').text;
   function program(defines) {
     const p = gl.createProgram();
@@ -1644,13 +1796,15 @@ void main() {
     ['murk',       'Water murkiness', '',     0.3, 3,   0.01, 1,    'Water'],
     ['depth',      'Sea depth',       '×',    0.3, 5,   0.01, 1,    'Water'],
     ['glow',       'Glowing plankton (night)', '', 0, 1, 0.01, 0.7, 'Water'],
-    ['sunElev',    'Sun height',      '°',    -18, 70,  0.1,  30,   'Sky'],
+    ['sunElev',    'Sun height',      '°',    -18, 90,  0.1,  30,   'Sky'],
     ['sunAzim',    'Sun direction',   '°',    -180, 180, 0.5, 59,   'Sky'],
+    ['season',     'Season (winter → summer)', '', 0, 1, 0.01, 0.5, 'Sky'],
     ['clouds',     'Clouds',          '',     0,   1,   0.01, 0.5,  'Sky'],
     ['cloudSpeed', 'Cloud speed',     '×',    0,   4,   0.01, 1,    'Sky'],
     ['planes',     'Air traffic',     '',     0,   1,   0.01, 1,    'Sky'],
     ['moon',       'Moon phase (new → full)', '', 0, 1, 0.01, 0.75, 'Night sky'],
     ['stars',      'Stars & Milky Way', '',   0,   1.5, 0.01, 1,    'Night sky'],
+    ['lines',      'Constellation lines', '', 0,   1,   0.01, 0,    'Night sky'],
     ['sats',       'Satellites',      '',     0,   1,   0.01, 1,    'Night sky'],
     ['meteors',    'Shooting stars',  '',     0,   1,   0.01, 0.4,  'Night sky'],
     ['aurora',     'Northern lights', '',     0,   1,   0.01, 0,    'Night sky'],
@@ -1694,10 +1848,22 @@ void main() {
     'Meteors':       { icon: '🌠', time: 'Night', lookUp: true, v: { ...sea(3, 0.9, 0.5, 0.9, 0.08, 0.4), moon: 0.1, stars: 1.1, meteors: 1.0, sunElev: -18, sunAzim: 180, exposure: 2.5 } },
     'Full moon':     { icon: '🌕', time: 'Night', lookUp: true, v: { ...sea(4, 1.0, 0.6, 1.0, 0.3, 0.6), moon: 1.0, sunElev: -16, sunAzim: 180, exposure: 2.2 } },
   };
+  // where you are on the globe: the latitude sets how high the sun climbs and which stars
+  // you see; the rest is the colour of the water, the light and the ice
+  const CLIMATES = {
+    Temperate: { icon: '🌲', lat: 48, tropic: 0, polar: 0 },
+    Tropical:  { icon: '🏝️', lat: 12, tropic: 1, polar: 0 },
+    Polar:     { icon: '🧊', lat: 72, tropic: 0, polar: 1 },
+  };
+  // the sun's height at noon for the chosen latitude and season (northern hemisphere)
+  function noonElev() {
+    const decl = -23.44 * Math.cos(Math.PI * S.season);
+    return 90 - Math.abs(CLIMATES[S.climate].lat - decl);
+  }
   const TIMES = {
     'Dawn':        { icon: '🌄', v: { sunElev: 1,  sunAzim: -100, exposure: 1.3 } },
-    'Morning':     { icon: '🌤️', v: { sunElev: 14, sunAzim: -50,  exposure: 1.1 } },
-    'Noon':        { icon: '🌞', v: { sunElev: 30, sunAzim: 59,   exposure: 1.05 } },
+    'Morning':     { icon: '🌤️', v: () => ({ sunElev: Math.round(noonElev() * 0.35), sunAzim: -50, exposure: 1.1 }) },
+    'Noon':        { icon: '🌞', v: () => ({ sunElev: Math.round(noonElev()), sunAzim: 59, exposure: 1.05 }) },
     'Golden hour': { icon: '🌅', v: { sunElev: 4,  sunAzim: 8,    exposure: 1.15 } },
     'Twilight':    { icon: '🌆', v: { sunElev: -3, sunAzim: 0,    exposure: 1.6 } },
     'Night':       { icon: '🌙', lookUp: true, v: { sunElev: -16, sunAzim: 180, exposure: 2.4 } },
@@ -1706,8 +1872,10 @@ void main() {
   const STORE_KEY = 'ocean-settings-v1';
   const S = { ...DEFAULTS, weather: null, time: null }; // targets: what the sliders show
   try { Object.assign(S, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
+  if (!CLIMATES[S.climate]) S.climate = 'Temperate'; // settings saved before climates existed
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) {} }
   const C = { ...S }; // what the scene shows right now; eases toward S
+  const clim = { ...CLIMATES[S.climate] }; // the climate the scene shows, easing toward the chosen one
   const rate = Object.fromEntries(Object.keys(DEFAULTS).map(k => [k, 8]));
 
   const panel = document.getElementById('panel');
@@ -1734,8 +1902,10 @@ void main() {
     input.value = S[key];
     show();
     input.addEventListener('input', () => {
+      const noon = noonElev();
       S[key] = +input.value; rate[key] = 8; show(); save();
       if (key === 'sunElev' || key === 'sunAzim' || key === 'moon') setReal(false);
+      if (key === 'season') followSun(noon);
     });
     inputs[key] = { input, show };
     group.appendChild(row);
@@ -1769,9 +1939,33 @@ void main() {
   }
   const weatherBtns = presetButtons('weather', WEATHER, 'weather');
   const timeBtns = presetButtons('times', TIMES, 'time');
+  // a new climate or season stretches the sun's daily arc to the new noon height
+  // (the real sky keeps the true sun)
+  function followSun(oldNoon) {
+    if (real.on) return;
+    const noon = noonElev();
+    let e = S.sunElev;
+    if (e > 0) e = oldNoon > 0.5 && noon > 0.5 ? e * noon / oldNoon : Math.min(e, noon);
+    setTargets({ sunElev: Math.max(-18, Math.min(90, e)) }, 1.2);
+  }
+  const climateBtns = {};
+  for (const name in CLIMATES) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="ic">${CLIMATES[name].icon}</span><span>${name}</span>`;
+    b.addEventListener('click', () => {
+      const noon = noonElev();
+      S.climate = name;
+      followSun(noon);
+      save();
+      markPresets();
+    });
+    document.getElementById('climates').appendChild(b);
+    climateBtns[name] = b;
+  }
   function markPresets() {
     for (const n in weatherBtns) weatherBtns[n].setAttribute('aria-pressed', String(S.weather === n));
     for (const n in timeBtns) timeBtns[n].setAttribute('aria-pressed', String(S.time === n));
+    for (const n in climateBtns) climateBtns[n].setAttribute('aria-pressed', String(S.climate === n));
     autoBtn.setAttribute('aria-pressed', String(!!S.auto));
   }
 
@@ -1825,9 +2019,11 @@ void main() {
             Math.sin(dec) * Math.cos(lat) - Math.cos(dec) * Math.cos(H) * Math.sin(lat)];
   }
   const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  // rotation taking the frame (a1, b1) onto (a2, b2), column-major for GLSL
-  function frameRot(a1, b1, a2, b2) {
-    const F1 = [a1, b1, cross3(a1, b1)], F2 = [a2, b2, cross3(a2, b2)];
+  // matrix taking the frame (a1, b1, c1) onto (a2, b2, c2), column-major for GLSL. The local
+  // sky (east, up, north) is left-handed, so the third axes are passed in rather than taken as
+  // cross products: otherwise the whole sky would come out mirror-imaged
+  function frameRot(a1, b1, c1, a2, b2, c2) {
+    const F1 = [a1, b1, c1], F2 = [a2, b2, c2];
     const m = new Float32Array(9);
     for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) {
       let s = 0;
@@ -1837,9 +2033,13 @@ void main() {
     return m;
   }
   const GAL_N = [-0.86765, -0.19807, 0.45604], GAL_C = [-0.05495, -0.87338, -0.48393];
-  // with the real sky off, the Milky Way arches up out of the sea in front of you
-  const DEFAULT_SKY = frameRot([-0.943, -0.276, 0.188], [0.173, 0.075, 0.981], GAL_N, GAL_C);
-  const real = { on: false, lat: 20, lon: 0, place: '', located: false, skyRot: DEFAULT_SKY, moon: [0, -1, 0], sun: [0, 1, 0], timer: 0 };
+  const GAL_B = cross3(GAL_N, GAL_C);
+  const skyAt = (lst, lat) => frameRot(toLocal(GAL_N, lst, lat), toLocal(GAL_C, lst, lat), toLocal(GAL_B, lst, lat),
+                                       GAL_N, GAL_C, GAL_B);
+  // with the real sky off: the stars over the chosen climate's latitude at about 10 pm in the
+  // chosen season (winter: Orion high in the south-east; summer: Scorpius and the Milky Way's core)
+  const climateSky = () => skyAt((4 + 12 * C.season) * 15 * RAD, clim.lat * RAD);
+  const real = { on: false, lat: 20, lon: 0, place: '', located: false, skyRot: null, moon: [0, -1, 0], sun: [0, 1, 0], timer: 0 };
   const realBtn = document.getElementById('realsky'), realInfo = document.getElementById('realinfo');
   const fmtPlace = () => `${Math.abs(real.lat).toFixed(1)}°${real.lat >= 0 ? 'N' : 'S'} ${Math.abs(real.lon).toFixed(1)}°${real.lon >= 0 ? 'E' : 'W'}`;
   function locate() {
@@ -1864,7 +2064,7 @@ void main() {
     const s = sunEq(d), m = moonEq(d);
     real.sun = toLocal(s, lst, lat);
     real.moon = toLocal(m, lst, lat);
-    real.skyRot = frameRot(toLocal(GAL_N, lst, lat), toLocal(GAL_C, lst, lat), GAL_N, GAL_C);
+    real.skyRot = skyAt(lst, lat);
     const elev = Math.asin(real.sun[1]) / RAD;
     const lit = (1 - (s[0] * m[0] + s[1] * m[1] + s[2] * m[2])) / 2; // fraction of the moon lit
     setTargets({
@@ -1889,10 +2089,350 @@ void main() {
   }
   realBtn.addEventListener('click', () => setReal(!real.on));
 
+  // the brightest real stars (J2000): name, RA h m s, Dec ° ′ ″, visual magnitude, B−V colour index
+  const STARS = `
+  Ori: aOri 05 55 10 +07 24 25 0.50 1.85, bOri 05 14 32 -08 12 06 0.13 -0.03, gOri 05 25 08 +06 20 59 1.64 -0.22,
+    dOri 05 32 00 -00 17 57 2.23 -0.22, eOri 05 36 13 -01 12 07 1.69 -0.18, zOri 05 40 46 -01 56 34 1.77 -0.21,
+    kOri 05 47 45 -09 40 11 2.06 -0.17, lOri 05 35 08 +09 56 03 3.33 -0.16, iOri 05 35 26 -05 54 36 2.77 -0.24,
+    p3Ori 04 49 50 +06 57 41 3.19 0.45, p2Ori 04 50 37 +08 54 01 4.36 0.01, p4Ori 04 51 12 +05 36 18 3.68 -0.17,
+    p5Ori 04 54 15 +02 26 26 3.72 -0.18, muOri 06 02 23 +09 38 50 4.12 0.16, etaOri 05 24 29 -02 23 49 3.36 -0.17,
+    tOri 05 17 36 -06 50 40 3.60 -0.11, sOri 05 38 45 -02 36 00 3.81 -0.24
+  Tau: aTau 04 35 55 +16 30 33 0.87 1.54, bTau 05 26 18 +28 36 27 1.65 -0.13, zTau 05 37 39 +21 08 33 3.00 -0.19,
+    etaTau 03 47 29 +24 06 18 2.87 -0.09, 27Tau 03 49 10 +24 03 12 3.62 -0.07, 17Tau 03 44 53 +24 06 48 3.70 -0.11,
+    20Tau 03 45 50 +24 22 04 3.87 -0.07, 23Tau 03 46 20 +23 56 54 4.18 -0.06, 19Tau 03 45 12 +24 28 02 4.30 -0.11,
+    th2Tau 04 28 40 +15 52 15 3.40 0.18, th1Tau 04 28 34 +15 57 44 3.84 0.95, gTau 04 19 48 +15 37 39 3.65 0.99,
+    dTau 04 22 56 +17 32 33 3.76 0.98, eTau 04 28 37 +19 10 50 3.53 1.01, lTau 04 00 41 +12 29 25 3.47 -0.12,
+    oTau 03 24 49 +09 01 44 3.60 0.89, xTau 03 27 10 +09 43 58 3.74 -0.09
+  Gem: aGem 07 34 36 +31 53 18 1.58 0.03, bGem 07 45 19 +28 01 34 1.14 1.00, gGem 06 37 43 +16 23 57 1.93 0.00,
+    dGem 07 20 07 +21 58 56 3.53 0.34, eGem 06 43 56 +25 07 52 2.98 1.40, zGem 07 04 07 +20 34 13 3.79 0.79,
+    muGem 06 22 58 +22 30 49 2.88 1.64, etaGem 06 14 53 +22 30 24 3.28 1.60, xGem 06 45 17 +12 53 44 3.36 0.43,
+    kGem 07 44 27 +24 23 53 3.57 0.93, lGem 07 18 06 +16 32 25 3.58 0.11, thGem 06 52 47 +33 57 40 3.60 0.10,
+    iGem 07 25 44 +27 47 53 3.79 1.03, tGem 07 11 08 +30 14 43 4.41 1.26, uGem 07 35 55 +26 53 45 4.06 1.54,
+    nGem 06 28 58 +20 12 44 4.15 -0.13
+  CMa: aCMa 06 45 09 -16 42 58 -1.46 0.00, bCMa 06 22 42 -17 57 21 1.98 -0.23, eCMa 06 58 38 -28 58 20 1.50 -0.21,
+    dCMa 07 08 23 -26 23 36 1.84 0.68, etaCMa 07 24 06 -29 18 11 2.45 -0.08, zCMa 06 20 19 -30 03 48 3.02 -0.19,
+    o2CMa 07 03 01 -23 49 59 3.02 -0.08, sCMa 07 01 43 -27 56 05 3.47 1.73, o1CMa 06 54 08 -24 11 03 3.87 1.73,
+    thCMa 06 54 11 -12 02 19 4.07 1.43, kCMa 06 49 50 -32 30 31 3.96 -0.23, n2CMa 06 36 41 -19 15 21 3.95 1.06
+  CMi: aCMi 07 39 18 +05 13 30 0.34 0.42, bCMi 07 27 09 +08 17 22 2.90 -0.09
+  Aur: aAur 05 16 41 +45 59 53 0.08 0.80, bAur 05 59 32 +44 56 51 1.90 0.03, thAur 05 59 43 +37 12 45 2.62 -0.08,
+    iAur 04 57 00 +33 09 58 2.69 1.53, eAur 05 01 58 +43 49 24 2.99 0.54, etaAur 05 06 31 +41 14 04 3.17 -0.18,
+    zAur 05 02 29 +41 04 33 3.75 1.22, dAur 05 59 32 +54 17 05 3.72 1.00
+  Per: aPer 03 24 19 +49 51 40 1.79 0.48, bPer 03 08 10 +40 57 20 2.12 -0.05, zPer 03 54 08 +31 53 01 2.85 0.12,
+    ePer 03 57 51 +40 00 37 2.89 -0.18, gPer 03 04 48 +53 30 23 2.93 0.70, dPer 03 42 55 +47 47 15 3.01 -0.13,
+    rPer 03 05 11 +38 50 25 3.39 1.65, etaPer 02 50 42 +55 53 44 3.76 1.68, nPer 03 45 12 +42 34 43 3.77 0.42,
+    kPer 03 09 30 +44 51 27 3.80 0.98, oPer 03 44 19 +32 17 18 3.83 0.05, xPer 03 58 58 +35 47 28 4.04 0.01
+  Cas: aCas 00 40 30 +56 32 14 2.24 1.17, bCas 00 09 11 +59 08 59 2.28 0.34, gCas 00 56 43 +60 43 00 2.15 -0.15,
+    dCas 01 25 49 +60 14 07 2.68 0.13, eCas 01 54 24 +63 40 12 3.37 -0.15, etaCas 00 49 06 +57 48 55 3.44 0.57
+  And: aAnd 00 08 23 +29 05 26 2.06 -0.11, bAnd 01 09 44 +35 37 14 2.05 1.58, gAnd 02 03 54 +42 19 47 2.17 1.37,
+    dAnd 00 39 20 +30 51 40 3.27 1.28, oAnd 23 01 55 +42 19 34 3.62 -0.09, muAnd 00 56 45 +38 29 58 3.87 0.13
+  Peg: aPeg 23 04 46 +15 12 19 2.49 -0.04, bPeg 23 03 46 +28 04 58 2.42 1.67, gPeg 00 13 14 +15 11 01 2.83 -0.23,
+    ePeg 21 44 11 +09 52 30 2.39 1.53, etaPeg 22 43 00 +30 13 17 2.94 0.86, zPeg 22 41 28 +10 49 53 3.40 -0.09,
+    thPeg 22 10 12 +06 11 52 3.53 0.08, muPeg 22 50 00 +24 36 06 3.48 0.93, lPeg 22 46 32 +23 33 56 3.95 1.07,
+    iPeg 22 07 01 +25 20 42 3.76 0.44, kPeg 21 44 39 +25 38 42 4.13 0.43
+  UMa: aUMa 11 03 44 +61 45 03 1.79 1.07, bUMa 11 01 50 +56 22 57 2.37 -0.02, gUMa 11 53 50 +53 41 41 2.44 0.00,
+    dUMa 12 15 26 +57 01 57 3.31 0.08, eUMa 12 54 02 +55 57 35 1.77 -0.02, zUMa 13 23 56 +54 55 31 2.27 0.02,
+    80UMa 13 25 13 +54 59 17 4.01 0.16, etaUMa 13 47 32 +49 18 48 1.86 -0.19, psUMa 11 09 40 +44 29 55 3.01 1.14,
+    muUMa 10 22 20 +41 29 58 3.05 1.59, iUMa 08 59 12 +48 02 30 3.14 0.19, thUMa 09 32 51 +51 40 38 3.17 0.46,
+    oUMa 08 30 16 +60 43 05 3.36 0.85, lUMa 10 17 06 +42 54 52 3.45 0.03, nUMa 11 18 29 +33 05 39 3.48 1.40,
+    kUMa 09 03 37 +47 09 24 3.60 0.01, chUMa 11 46 03 +47 46 46 3.71 1.18, uUMa 09 50 59 +59 02 19 3.80 0.28,
+    23UMa 09 31 32 +63 03 43 3.65 0.33, xUMa 11 18 11 +31 31 45 3.79 0.59
+  UMi: aUMi 02 31 49 +89 15 51 1.98 0.60, bUMi 14 50 42 +74 09 20 2.08 1.47, gUMi 15 20 44 +71 50 02 3.05 0.05,
+    dUMi 17 32 13 +86 35 11 4.36 0.02, eUMi 16 45 58 +82 02 14 4.21 0.89, zUMi 15 44 04 +77 47 40 4.32 0.04,
+    etaUMi 16 17 30 +75 45 19 4.95 0.37
+  Dra: gDra 17 56 36 +51 29 20 2.23 1.52, bDra 17 30 26 +52 18 05 2.79 0.98, etaDra 16 23 59 +61 30 51 2.74 0.91,
+    dDra 19 12 33 +67 39 42 3.07 1.00, zDra 17 08 47 +65 42 53 3.17 -0.12, iDra 15 24 56 +58 57 58 3.29 1.16,
+    chDra 18 21 03 +72 43 58 3.57 0.49, xDra 17 53 32 +56 52 21 3.75 1.18, aDra 14 04 23 +64 22 33 3.65 -0.05,
+    lDra 11 31 24 +69 19 52 3.84 1.62, kDra 12 33 29 +69 47 17 3.87 -0.13, thDra 16 01 53 +58 33 55 4.01 0.52
+  Cyg: aCyg 20 41 26 +45 16 49 1.25 0.09, gCyg 20 22 14 +40 15 24 2.20 0.68, eCyg 20 46 13 +33 58 13 2.46 1.03,
+    dCyg 19 44 58 +45 07 51 2.87 -0.03, bCyg 19 30 43 +27 57 35 3.08 1.13, zCyg 21 12 56 +30 13 37 3.21 0.99,
+    xCyg 21 04 56 +43 55 40 3.72 1.65, tCyg 21 14 48 +38 02 44 3.72 0.39, iCyg 19 29 42 +51 43 47 3.79 0.14,
+    kCyg 19 17 06 +53 22 07 3.77 0.96, etaCyg 19 56 18 +35 05 00 3.89 1.02
+  Lyr: aLyr 18 36 56 +38 47 01 0.03 0.00, bLyr 18 50 05 +33 21 46 3.52 0.00, gLyr 18 58 57 +32 41 22 3.24 -0.05,
+    dLyr 18 54 30 +36 53 55 4.30 1.68, zLyr 18 44 46 +37 36 18 4.36 0.19
+  Aql: aAql 19 50 47 +08 52 06 0.77 0.22, gAql 19 46 16 +10 36 48 2.72 1.52, zAql 19 05 25 +13 51 48 2.99 0.01,
+    thAql 20 11 18 -00 49 17 3.23 -0.07, dAql 19 25 30 +03 06 53 3.36 0.32, lAql 19 06 15 -04 52 57 3.44 -0.09,
+    bAql 19 55 19 +06 24 24 3.71 0.86, etaAql 19 52 28 +01 00 20 3.87 0.89, eAql 18 59 37 +15 04 06 4.02 1.08
+  Del: bDel 20 37 33 +14 35 43 3.63 0.44, aDel 20 39 38 +15 54 43 3.77 -0.06, gDel 20 46 40 +16 07 27 4.27 1.04,
+    dDel 20 43 28 +15 04 29 4.43 0.32, eDel 20 33 13 +11 18 12 4.03 -0.13
+  Sge: gSge 19 58 45 +19 29 32 3.47 1.57
+  Sco: aSco 16 29 24 -26 25 55 1.06 1.83, lSco 17 33 37 -37 06 14 1.62 -0.22, thSco 17 37 19 -42 59 52 1.86 0.40,
+    dSco 16 00 20 -22 37 18 2.32 -0.12, eSco 16 50 10 -34 17 36 2.29 1.15, kSco 17 42 29 -39 01 48 2.39 -0.17,
+    bSco 16 05 26 -19 48 19 2.62 -0.07, uSco 17 30 46 -37 17 45 2.69 -0.22, tSco 16 35 53 -28 12 58 2.82 -0.25,
+    sSco 16 21 11 -25 35 34 2.89 0.13, pSco 15 58 51 -26 06 51 2.89 -0.19, iSco 17 47 35 -40 07 37 2.99 0.51,
+    muSco 16 51 52 -38 02 51 3.04 -0.20, GSco 17 49 51 -37 02 36 3.21 1.17, etaSco 17 12 09 -43 14 21 3.33 0.41,
+    zSco 16 54 35 -42 21 41 3.62 1.37, rSco 15 56 53 -29 12 51 3.87 -0.20
+  Sgr: eSgr 18 24 10 -34 23 05 1.85 -0.03, sSgr 18 55 16 -26 17 48 2.05 -0.22, zSgr 19 02 37 -29 52 48 2.60 0.08,
+    dSgr 18 20 60 -29 49 41 2.70 1.38, lSgr 18 27 58 -25 25 18 2.81 1.04, gSgr 18 05 48 -30 25 27 2.99 1.00,
+    phSgr 18 45 39 -26 59 27 3.17 -0.11, tSgr 19 06 56 -27 40 14 3.32 1.19, pSgr 19 09 46 -21 01 25 2.89 0.35,
+    etaSgr 18 17 38 -36 45 42 3.11 1.56, muSgr 18 13 46 -21 03 32 3.86 0.23, x2Sgr 18 57 44 -21 06 24 3.51 1.18,
+    oSgr 19 04 41 -21 44 29 3.77 1.01
+  Cru: aCru 12 26 36 -63 05 57 0.77 -0.24, bCru 12 47 43 -59 41 19 1.25 -0.23, gCru 12 31 10 -57 06 48 1.59 1.60,
+    dCru 12 15 09 -58 44 56 2.79 -0.23, eCru 12 21 22 -60 24 04 3.59 1.42
+  Cen: aCen 14 39 36 -60 50 02 -0.27 0.71, bCen 14 03 49 -60 22 23 0.61 -0.23, thCen 14 06 41 -36 22 12 2.06 1.01,
+    gCen 12 41 31 -48 57 35 2.20 -0.01, eCen 13 39 53 -53 27 59 2.30 -0.22, etaCen 14 35 30 -42 09 28 2.31 -0.19,
+    zCen 13 55 32 -47 17 18 2.55 -0.22, dCen 12 08 22 -50 43 20 2.58 -0.12, iCen 13 20 36 -36 42 44 2.75 0.04,
+    kCen 14 59 10 -42 06 15 3.13 -0.20, lCen 11 35 47 -63 01 11 3.13 -0.04, nCen 13 49 30 -41 41 16 3.41 -0.22,
+    muCen 13 49 37 -42 28 26 3.04 -0.17
+  Car: aCar 06 23 57 -52 41 45 -0.74 0.15, bCar 09 13 12 -69 43 02 1.67 0.07, eCar 08 22 31 -59 30 35 1.86 1.28,
+    iCar 09 17 05 -59 16 31 2.21 0.18, thCar 10 42 57 -64 23 40 2.76 -0.22, uCar 09 47 06 -65 04 19 2.97 0.27,
+    omCar 10 13 44 -70 02 16 3.29 -0.08, pCar 10 32 01 -61 41 07 3.30 -0.12, qCar 10 17 05 -61 19 56 3.40 1.54,
+    chCar 07 56 47 -52 58 56 3.47 -0.18, aaCar 09 10 58 -58 58 01 3.44 -0.18
+  Vel: gVel 08 09 32 -47 20 12 1.83 -0.22, dVel 08 44 42 -54 42 30 1.96 0.04, lVel 09 07 60 -43 25 57 2.21 1.66,
+    kVel 09 22 07 -55 00 38 2.50 -0.18, muVel 10 46 46 -49 25 12 2.69 0.90, NVel 09 31 13 -57 02 04 3.13 1.54,
+    phVel 09 56 52 -54 34 04 3.54 -0.08, psVel 09 30 42 -40 28 00 3.60 0.36, oVel 08 40 18 -52 55 19 3.62 -0.18
+  Pup: zPup 08 03 35 -40 00 12 2.25 -0.26, pPup 07 17 09 -37 05 51 2.70 1.62, rPup 08 07 33 -24 18 15 2.81 0.43,
+    tPup 06 49 56 -50 36 53 2.93 1.20, nPup 06 37 46 -43 11 45 3.17 -0.11, sPup 07 29 14 -43 18 05 3.25 1.51,
+    xPup 07 49 18 -24 51 35 3.34 1.24
+  Leo: aLeo 10 08 22 +11 58 02 1.35 -0.11, bLeo 11 49 04 +14 34 19 2.14 0.09, gLeo 10 19 58 +19 50 29 2.01 1.15,
+    dLeo 11 14 06 +20 31 25 2.56 0.12, eLeo 09 45 51 +23 46 27 2.98 0.80, thLeo 11 14 14 +15 25 46 3.34 -0.01,
+    zLeo 10 16 41 +23 25 02 3.44 0.31, etaLeo 10 07 20 +16 45 45 3.52 -0.03, muLeo 09 52 46 +26 00 25 3.88 1.22,
+    oLeo 09 41 09 +09 53 32 3.52 0.49, rLeo 10 32 49 +09 18 24 3.85 -0.14, iLeo 11 23 56 +10 31 45 3.94 0.41
+  Cnc: bCnc 08 16 31 +09 11 08 3.52 1.48, dCnc 08 44 41 +18 09 15 3.94 1.08, iCnc 08 46 42 +28 45 36 4.02 1.01,
+    aCnc 08 58 29 +11 51 28 4.25 0.14
+  Vir: aVir 13 25 12 -11 09 41 0.98 -0.23, gVir 12 41 40 -01 26 58 2.74 0.36, eVir 13 02 11 +10 57 33 2.83 0.94,
+    zVir 13 34 42 -00 35 45 3.37 0.11, dVir 12 55 36 +03 23 51 3.38 1.58, bVir 11 50 42 +01 45 53 3.61 0.55,
+    muVir 14 43 04 -05 39 30 3.88 0.38, etaVir 12 19 54 -00 40 00 3.89 0.02, 109Vir 14 46 15 +01 53 34 3.72 -0.01
+  Boo: aBoo 14 15 40 +19 10 57 -0.05 1.23, eBoo 14 44 59 +27 04 27 2.37 0.97, etaBoo 13 54 41 +18 23 52 2.68 0.58,
+    gBoo 14 32 05 +38 18 30 3.03 0.19, dBoo 15 15 30 +33 18 53 3.47 0.95, bBoo 15 01 57 +40 23 26 3.50 0.97,
+    rBoo 14 31 50 +30 22 17 3.58 1.30, zBoo 14 41 09 +13 43 42 3.78 0.05
+  CrB: aCrB 15 34 41 +26 42 53 2.23 -0.02, bCrB 15 27 50 +29 06 21 3.68 0.28, gCrB 15 42 45 +26 17 44 3.84 0.00,
+    thCrB 15 32 56 +31 21 33 4.14 -0.13, dCrB 15 49 36 +26 04 06 4.63 0.80, eCrB 15 57 35 +26 52 40 4.15 1.23
+  Her: bHer 16 30 13 +21 29 22 2.77 0.94, zHer 16 41 17 +31 36 10 2.81 0.65, aHer 17 14 39 +14 23 25 3.10 1.44,
+    dHer 17 15 02 +24 50 21 3.14 0.08, pHer 17 15 03 +36 48 33 3.16 1.44, muHer 17 46 27 +27 43 14 3.42 0.75,
+    etaHer 16 42 54 +38 55 20 3.48 0.92, xHer 17 57 46 +29 14 52 3.70 0.94, gHer 16 21 55 +19 09 11 3.75 0.27,
+    iHer 17 39 28 +46 00 23 3.80 -0.18, thHer 17 56 15 +37 15 02 3.86 1.35, eHer 17 00 17 +30 55 35 3.92 -0.01,
+    oHer 18 07 33 +28 45 45 3.83 -0.03
+  Oph: aOph 17 34 56 +12 33 36 2.07 0.15, etaOph 17 10 23 -15 43 29 2.43 0.06, zOph 16 37 10 -10 34 02 2.56 0.02,
+    dOph 16 14 21 -03 41 40 2.74 1.58, bOph 17 43 28 +04 34 02 2.77 1.16, kOph 16 57 40 +09 22 30 3.20 1.15,
+    eOph 16 18 19 -04 41 33 3.24 0.97, thOph 17 22 01 -24 59 58 3.27 -0.22, nOph 17 59 02 -09 46 25 3.32 0.99,
+    gOph 17 47 54 +02 42 26 3.75 0.04, lOph 16 30 55 +01 59 02 3.82 0.01
+  Ser: aSer 15 44 16 +06 25 32 2.63 1.17, muSer 15 49 37 -03 25 49 3.53 -0.04, etaSer 18 21 19 -02 53 56 3.26 0.94,
+    bSer 15 46 11 +15 25 19 3.67 0.06, eSer 15 50 49 +04 28 40 3.71 0.15, dSer 15 34 48 +10 32 20 3.80 0.26,
+    xSer 17 37 35 -15 23 55 3.54 0.26, gSer 15 56 27 +15 39 42 3.85 0.48
+  Lib: bLib 15 17 00 -09 22 59 2.61 -0.07, aLib 14 50 53 -16 02 30 2.75 0.15, sLib 15 04 04 -25 16 55 3.29 1.70,
+    gLib 15 35 32 -14 47 22 3.91 1.01, uLib 15 37 01 -28 08 06 3.58 1.38, tLib 15 38 39 -29 46 40 3.66 -0.17
+  Cap: dCap 21 47 02 -16 07 38 2.87 0.29, bCap 20 21 01 -14 46 53 3.08 0.79, a2Cap 20 18 03 -12 32 41 3.57 0.94,
+    gCap 21 40 05 -16 39 44 3.68 0.32, zCap 21 26 40 -22 24 41 3.74 1.00, thCap 21 05 57 -17 13 58 4.07 -0.01,
+    omCap 20 51 49 -26 55 09 4.11 1.64
+  Aqr: bAqr 21 31 33 -05 34 16 2.91 0.83, aAqr 22 05 47 -00 19 11 2.96 0.98, dAqr 22 54 39 -15 49 15 3.27 0.05,
+    zAqr 22 28 50 -00 01 13 3.65 0.38, lAqr 22 52 37 -07 34 47 3.74 1.64, eAqr 20 47 41 -09 29 45 3.77 0.00,
+    gAqr 22 21 39 -01 23 14 3.84 -0.05, etaAqr 22 35 21 -00 07 03 4.02 -0.09, 88Aqr 23 09 27 -21 10 21 3.66 1.24,
+    98Aqr 23 22 58 -20 06 02 3.97 1.11
+  Psc: etaPsc 01 31 29 +15 20 45 3.62 0.97, gPsc 23 17 10 +03 16 56 3.69 0.92
+  Ari: aAri 02 07 10 +23 27 45 2.00 1.15, bAri 01 54 38 +20 48 29 2.64 0.13, gAri 01 53 32 +19 17 45 3.88 -0.04,
+    41Ari 02 49 59 +27 15 38 3.61 -0.10
+  Tri: bTri 02 09 33 +34 59 14 3.00 0.14, aTri 01 53 05 +29 34 44 3.41 0.49, gTri 02 17 19 +33 50 50 4.01 0.02
+  Cet: bCet 00 43 35 -17 59 12 2.04 1.02, aCet 03 02 17 +04 05 23 2.54 1.64, etaCet 01 08 35 -10 10 56 3.45 1.16,
+    gCet 02 43 18 +03 14 09 3.47 0.09, tCet 01 44 04 -15 56 15 3.50 0.72, iCet 00 19 26 -08 49 26 3.56 1.22,
+    thCet 01 24 01 -08 11 01 3.60 1.06, zCet 01 51 28 -10 20 06 3.73 1.14, oCet 02 19 21 -02 58 39 3.50 1.42,
+    dCet 02 39 29 +00 19 43 4.07 -0.21
+  Eri: aEri 01 37 43 -57 14 12 0.46 -0.16, bEri 05 07 51 -05 05 11 2.79 0.13, thEri 02 58 16 -40 18 17 2.90 0.14,
+    gEri 03 58 02 -13 30 31 2.95 1.59, dEri 03 43 15 -09 45 48 3.54 0.92, eEri 03 32 56 -09 27 30 3.73 0.88,
+    etaEri 02 56 26 -08 53 53 3.89 1.11, t4Eri 03 19 31 -21 45 28 3.69 1.62, phEri 02 16 31 -51 30 44 3.56 -0.12,
+    chEri 01 55 58 -51 36 32 3.70 0.85, u2Eri 04 35 33 -30 33 44 3.82 0.98, 43Eri 04 24 02 -34 01 01 3.96 1.49,
+    nEri 04 36 19 -03 21 09 3.93 -0.21, o1Eri 04 11 52 -06 50 15 4.04 0.33
+  Lep: aLep 05 32 44 -17 49 20 2.58 0.21, bLep 05 28 15 -20 45 34 2.84 0.82, eLep 05 05 28 -22 22 16 3.19 1.46,
+    muLep 05 12 56 -16 12 20 3.31 -0.11, zLep 05 46 57 -14 49 19 3.55 0.10, gLep 05 44 28 -22 26 54 3.59 0.47,
+    dLep 05 51 19 -20 52 45 3.81 0.99
+  Col: aCol 05 39 39 -34 04 27 2.64 -0.12, bCol 05 50 58 -35 46 06 3.12 1.16
+  Mon: bMon 06 28 49 -07 01 59 3.76 -0.10, gMon 06 14 51 -06 16 29 3.98 1.32
+  Hya: aHya 09 27 35 -08 39 31 1.98 1.44, gHya 13 18 55 -23 10 17 3.00 0.92, zHya 08 55 24 +05 56 44 3.11 1.00,
+    nHya 10 49 37 -16 11 37 3.11 1.25, pHya 14 06 22 -26 40 56 3.27 1.12, eHya 08 46 47 +06 25 08 3.38 0.68,
+    xHya 11 33 00 -31 51 27 3.54 0.94, lHya 10 10 35 -12 21 15 3.61 1.01, muHya 10 26 05 -16 50 11 3.81 1.48,
+    iHya 09 39 51 -01 08 34 3.91 1.32, dHya 08 37 39 +05 42 14 4.16 0.00, thHya 09 14 22 +02 18 51 3.88 -0.06
+  Crv: gCrv 12 15 48 -17 32 31 2.59 -0.11, bCrv 12 34 23 -23 23 48 2.65 0.89, dCrv 12 29 52 -16 30 56 2.95 -0.05,
+    eCrv 12 10 07 -22 37 11 3.00 1.33, aCrv 12 08 25 -24 43 44 4.02 0.32
+  Crt: dCrt 11 19 20 -14 46 43 3.56 1.12
+  Cep: aCep 21 18 35 +62 35 08 2.45 0.22, gCep 23 39 21 +77 37 57 3.21 1.03, bCep 21 28 40 +70 33 39 3.23 -0.22,
+    zCep 22 10 51 +58 12 05 3.35 1.57, etaCep 20 45 17 +61 50 20 3.43 0.92, iCep 22 49 41 +66 12 01 3.52 1.05,
+    dCep 22 29 10 +58 24 55 4.07 0.60
+  CVn: aCVn 12 56 02 +38 19 06 2.89 -0.12
+  Lyn: aLyn 09 21 03 +34 23 33 3.13 1.55
+  PsA: aPsA 22 57 39 -29 37 20 1.16 0.09
+  Gru: aGru 22 08 14 -46 57 40 1.74 -0.13, bGru 22 42 40 -46 53 05 2.10 1.60, gGru 21 53 56 -37 21 54 3.01 -0.12,
+    eGru 22 48 33 -51 19 01 3.49 0.08
+  Pav: aPav 20 25 39 -56 44 06 1.94 -0.20, bPav 20 44 58 -66 12 12 3.42 0.16, dPav 20 08 44 -66 10 55 3.56 0.76
+  TrA: aTrA 16 48 40 -69 01 40 1.92 1.44, bTrA 15 55 09 -63 25 50 2.85 0.29, gTrA 15 18 55 -68 40 46 2.89 0.01
+  Ara: bAra 17 25 18 -55 31 47 2.85 1.46, aAra 17 31 50 -49 52 34 2.95 -0.17, zAra 16 58 37 -55 59 25 3.13 1.55,
+    gAra 17 25 24 -56 22 39 3.34 -0.13, dAra 17 31 06 -60 41 01 3.62 -0.10
+  Lup: aLup 14 41 56 -47 23 18 2.30 -0.20, bLup 14 58 32 -43 08 02 2.68 -0.22, gLup 15 35 08 -41 10 00 2.78 -0.20,
+    dLup 15 21 22 -40 38 51 3.22 -0.22, eLup 15 22 41 -44 41 22 3.37 -0.18, zLup 15 12 17 -52 05 57 3.41 0.92,
+    etaLup 16 00 07 -38 23 48 3.41 -0.21
+  Hyi: bHyi 00 25 45 -77 15 15 2.80 0.62, aHyi 01 58 46 -61 34 11 2.86 0.28, gHyi 03 47 14 -74 14 20 3.24 1.62
+  Tuc: aTuc 22 18 30 -60 15 35 2.86 1.39
+  Phe: aPhe 00 26 17 -42 18 22 2.40 1.09, bPhe 01 06 05 -46 43 07 3.31 0.89, gPhe 01 28 22 -43 19 06 3.41 1.57
+  Mus: aMus 12 37 11 -69 08 08 2.69 -0.20, bMus 12 46 17 -68 06 29 3.05 -0.18
+  Cir: aCir 14 42 28 -64 58 43 3.19 0.24
+  Ind: aInd 20 37 34 -47 17 29 3.11 1.00
+  Dor: aDor 04 33 60 -55 02 42 3.27 -0.10
+  Ret: aRet 04 14 25 -62 28 26 3.35 0.91
+  Pic: aPic 06 48 11 -61 56 29 3.27 0.21
+  Tel: aTel 18 26 58 -45 58 06 3.51 -0.17`;
+  // stick figures joining them up, as chains of names
+  const FIGURES = `
+    lOri-aOri-gOri-lOri aOri-zOri-eOri-dOri-gOri zOri-kOri dOri-bOri aOri-muOri gOri-p3Ori-p2Ori p3Ori-p4Ori-p5Ori
+    zTau-aTau-th2Tau-gTau-lTau-oTau gTau-dTau-eTau-bTau
+    aGem-tGem-eGem-muGem-etaGem tGem-iGem-uGem-bGem-kGem uGem-dGem-zGem-gGem dGem-lGem-xGem tGem-thGem eGem-nGem
+    bCMa-aCMa-o2CMa-dCMa-eCMa-zCMa dCMa-etaCMa aCMa-thCMa eCMa-kCMa aCMi-bCMi
+    aAur-bAur-thAur-bTau-iAur-aAur bAur-dAur aAur-eAur-zAur-etaAur-aAur
+    etaPer-gPer-aPer-dPer-nPer-ePer-xPer-zPer-oPer aPer-kPer-bPer-rPer
+    bCas-aCas-gCas-dCas-eCas aAnd-dAnd-bAnd-gAnd bAnd-muAnd oAnd-aAnd
+    aPeg-bPeg-aAnd-gPeg-aPeg aPeg-zPeg-thPeg-ePeg bPeg-etaPeg bPeg-muPeg-lPeg-iPeg-kPeg
+    aUMa-bUMa-gUMa-dUMa-aUMa dUMa-eUMa-zUMa-etaUMa gUMa-chUMa-psUMa-muUMa-lUMa chUMa-nUMa-xUMa
+    bUMa-uUMa-thUMa-kUMa-iUMa aUMa-23UMa-oUMa-uUMa 23UMa-uUMa
+    aUMi-dUMi-eUMi-zUMi-bUMi-gUMi-etaUMi-zUMi
+    bDra-gDra-xDra-bDra xDra-dDra-chDra-zDra-etaDra-thDra-iDra-aDra-kDra-lDra
+    aCyg-gCyg-etaCyg-bCyg dCyg-gCyg-eCyg-zCyg dCyg-iCyg-kCyg
+    aLyr-zLyr-bLyr-gLyr-dLyr-zLyr eAql-zAql-dAql-lAql dAql-etaAql-thAql gAql-aAql-bAql aAql-dAql
+    aDel-bDel-dDel-gDel-aDel bDel-eDel
+    bSco-dSco-pSco-rSco dSco-sSco-aSco-tSco-eSco-muSco-zSco-etaSco-thSco-iSco-kSco-uSco-lSco iSco-GSco
+    gSgr-eSgr-dSgr-gSgr dSgr-lSgr-phSgr-dSgr eSgr-zSgr-phSgr zSgr-tSgr-sSgr-phSgr lSgr-muSgr sSgr-oSgr-pSgr
+    aCru-gCru bCru-dCru aCen-bCen-eCen-gCen-dCen eCen-zCen-etaCen-kCen zCen-nCen-iCen nCen-thCen
+    aCar-chCar-eCar-aaCar-iCar-qCar-pCar-thCar-omCar-bCar-uCar-iCar
+    gVel-dVel-kVel-NVel-phVel-muVel-psVel-lVel-gVel zPup-pPup-nPup-tPup zPup-rPup-xPup
+    aLeo-etaLeo-gLeo-zLeo-muLeo-eLeo gLeo-dLeo-bLeo-thLeo-aLeo dLeo-thLeo
+    bCnc-dCnc-iCnc dCnc-aCnc
+    bVir-etaVir-gVir-dVir-eVir gVir-aVir dVir-zVir-aVir
+    aBoo-etaBoo aBoo-eBoo-dBoo-bBoo-gBoo-rBoo-aBoo aBoo-zBoo thCrB-bCrB-aCrB-gCrB-dCrB-eCrB
+    gHer-bHer-zHer-etaHer-pHer-eHer-zHer eHer-dHer-aHer pHer-thHer-iHer dHer-muHer-xHer-oHer
+    aOph-kOph-lOph-dOph-eOph-zOph-etaOph-nOph-bOph-aOph etaOph-thOph
+    gSer-bSer-dSer-aSer-eSer-muSer
+    aLib-bLib-gLib-uLib aLib-sLib a2Cap-bCap-omCap-zCap-dCap-gCap-thCap-bCap
+    eAqr-bAqr-aAqr-gAqr-zAqr-etaAqr aAqr-lAqr-dAqr-88Aqr-98Aqr
+    gAri-bAri-aAri-41Ari aTri-bTri-gTri-aTri
+    aCet-gCet-dCet-oCet-zCet-tCet-bCet-etaCet-thCet-zCet bCet-iCet
+    bEri-nEri-o1Eri-gEri-dEri-eEri-etaEri t4Eri-u2Eri-43Eri-thEri-phEri-chEri-aEri etaEri-t4Eri
+    aLep-bLep-eLep-muLep-aLep aLep-zLep bLep-gLep-dLep aCol-bCol
+    dHya-zHya-thHya-iHya-aHya-lHya-muHya-nHya-xHya-gHya-pHya dHya-eHya-zHya
+    gCrv-dCrv-bCrv-eCrv-gCrv eCrv-aCrv
+    aCep-bCep-gCep-iCep-bCep iCep-zCep-aCep zCep-dCep aCep-etaCep
+    aGru-bGru-eGru gGru-aGru aPav-bPav-dPav-aPav aTrA-bTrA-gTrA-aTrA
+    aAra-bAra-zAra bAra-gAra-dAra aLup-bLup-dLup-gLup aLup-eLup-gLup aLup-zLup bLup-etaLup aMus-bMus
+    aPhe-bPhe-gPhe-aPhe bHyi-aHyi-gHyi-bHyi`;
+  // pack the catalogue into a small texture for the shader. The sky is cut into the cells of a
+  // cube map; each cell lists (as 16-bit indices) up to six stars whose glow reaches into it,
+  // so a pixel only ever looks at a handful. Two more rows hold each star's direction
+  // (16 bits per axis), magnitude and colour.
+  const CAT_G = 32, CAT_W = CAT_G * 6 * 3, CAT_H = CAT_G + 2, STAR_R = 0.0105; // as in the shader
+  const catalog = STARS.split(/[\n,]/).map(e => e.replace(/^\s*\w+:/, '').trim()).filter(Boolean).map(e => {
+    const t = e.split(/\s+/);
+    const ra = (+t[1] + t[2] / 60 + t[3] / 3600) * 15 * RAD;
+    const dec = (t[4][0] === '-' ? -1 : 1) * (Math.abs(+t[4]) + t[5] / 60 + t[6] / 3600) * RAD;
+    return { name: t[0], v: eqVec(ra, dec), mag: +t[7], bv: +t[8] };
+  }).sort((a, b) => a.mag - b.mag); // brightest first, so they win any crowded cell
+  function cubeCell(d) { // the same cells as cubeUV() in the shader
+    const a = d.map(Math.abs);
+    const [f, u, v] = a[0] >= a[1] && a[0] >= a[2] ? [d[0] > 0 ? 0 : 1, d[2] / a[0], d[1] / a[0]]
+                    : a[1] >= a[2] ? [d[1] > 0 ? 2 : 3, d[0] / a[1], d[2] / a[1]]
+                    : [d[2] > 0 ? 4 : 5, d[0] / a[2], d[1] / a[2]];
+    const cell = x => Math.min(CAT_G - 1, Math.floor((x * 0.5 + 0.5) * CAT_G));
+    return [f, cell(u), cell(v)];
+  }
+  // two unit vectors at right angles to v, for drawing small circles around a star
+  function tangents(v) {
+    let e1 = Math.abs(v[2]) < 0.9 ? [-v[1], v[0], 0] : [0, -v[2], v[1]];
+    const l = Math.hypot(...e1);
+    e1 = e1.map(x => x / l);
+    return [e1, cross3(v, e1)];
+  }
+  {
+    const data = new Uint8Array(CAT_W * CAT_H * 4), fill = new Map();
+    const put16 = (i, x) => { const q = Math.round(x); data[i] = q >> 8; data[i + 1] = q & 255; };
+    catalog.forEach((s, i) => {
+      const id = i + 1, v = s.v;
+      put16((CAT_G * CAT_W + i) * 4, (v[0] + 1) * 32767.5);
+      put16((CAT_G * CAT_W + i) * 4 + 2, (v[1] + 1) * 32767.5);
+      put16(((CAT_G + 1) * CAT_W + i) * 4, (v[2] + 1) * 32767.5);
+      data[((CAT_G + 1) * CAT_W + i) * 4 + 2] = Math.max(0, Math.min(255, Math.round((s.mag + 2) * 30)));
+      data[((CAT_G + 1) * CAT_W + i) * 4 + 3] = Math.max(0, Math.min(255, Math.round((s.bv + 0.5) * 100)));
+      // every cell touched by the disc the star's glow may cover
+      const [e1, e2] = tangents(v), seen = new Set();
+      for (let r = 0; r <= 2; r++) for (let k = 0; k < (r ? 16 : 1); k++) {
+        const a = k / 16 * 2 * Math.PI, o = Math.tan(STAR_R * r / 2);
+        const [f, cx, cy] = cubeCell(v.map((x, j) => x + (e1[j] * Math.cos(a) + e2[j] * Math.sin(a)) * o));
+        seen.add((f * CAT_G + cx) * CAT_G + cy);
+      }
+      for (const c of seen) {
+        const n = fill.get(c) || 0;
+        if (n >= 6) continue;
+        fill.set(c, n + 1);
+        const cx = Math.floor(c / CAT_G), cy = c % CAT_G;
+        put16((cy * CAT_W + cx * 3 + (n >> 1)) * 4 + (n & 1) * 2, id);
+      }
+    });
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, CAT_W, CAT_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+  // the constellation figures, drawn once (when first wanted) onto the six cube faces as
+  // straight lines: on a cube face, great circles are straight
+  let figuresTex = null;
+  function drawFigures() {
+    const N = 1024, cv = document.createElement('canvas');
+    cv.width = N * 3; cv.height = N * 2;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, cv.width, cv.height);
+    const byName = Object.fromEntries(catalog.map(s => [s.name, s.v]));
+    const segs = [];
+    for (const chain of FIGURES.trim().split(/\s+/)) {
+      const n = chain.split('-').map(k => byName[k]);
+      for (let i = 0; i + 1 < n.length; i++) if (n[i] && n[i + 1]) segs.push([n[i], n[i + 1]]);
+    }
+    for (let f = 0; f < 6; f++) {
+      const ax = f >> 1, sg = f & 1 ? -1 : 1;
+      const [iu, iv] = ax === 0 ? [2, 1] : ax === 1 ? [0, 2] : [0, 1];
+      const ox = (f % 3) * N, oy = Math.floor(f / 3) * N;
+      const px = d => [ox + (d[iu] / (sg * d[ax]) * 0.5 + 0.5) * N, oy + (d[iv] / (sg * d[ax]) * 0.5 + 0.5) * N];
+      g.save();
+      g.beginPath();
+      g.rect(ox, oy, N, N);
+      g.clip();
+      g.strokeStyle = '#fff';
+      g.lineWidth = 1.3;
+      g.beginPath();
+      for (let [a, b] of segs) {
+        const wa = sg * a[ax], wb = sg * b[ax], W = 0.05;
+        if (wa < W && wb < W) continue;
+        // cut the segment where it passes behind this face
+        if (wa < W) a = a.map((x, j) => x + (b[j] - x) * (W - wa) / (wb - wa));
+        if (wb < W) b = b.map((x, j) => x + (a[j] - x) * (W - wb) / (wa - wb));
+        g.moveTo(...px(a));
+        g.lineTo(...px(b));
+      }
+      g.stroke();
+      // leave a little gap around each star
+      g.fillStyle = '#000';
+      for (const s of catalog) {
+        const w = sg * s.v[ax];
+        if (w < 0.3) continue;
+        const [x, y] = px(s.v), u = s.v[iu] / w, v = s.v[iv] / w;
+        g.beginPath();
+        g.arc(x, y, 0.75 * RAD * N * 0.5 * Math.pow(1 + u * u + v * v, 0.75), 0, 2 * Math.PI);
+        g.fill();
+      }
+      g.restore();
+    }
+    figuresTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, figuresTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, cv);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
   markPresets();
   if (S.real) setReal(true);
   document.getElementById('reset').addEventListener('click', () => {
-    S.weather = null; S.time = null;
+    S.weather = null; S.time = null; S.climate = 'Temperate';
     setTargets(DEFAULTS, 1.5);
     markPresets();
   });
@@ -2051,6 +2591,20 @@ void main() {
   }));
   const birdBuf = new Float32Array(24);
   let flockX = 0, flockZ = 80, boatAmt = 0, birdAmt = 0;
+  // icebergs in the polar sea: scattered all around at first, later turning up ahead
+  const bergs = Array.from({ length: 4 }, () => ({ x: 0, z: 0, size: 0, seed: 0 }));
+  const bergBuf = new Float32Array(16);
+  function placeBerg(b, first) {
+    for (let tries = 0; tries < 8; tries++) { // clear of the island
+      const a = yaw + (Math.random() - 0.5) * (first ? 2.2 : 1.4);
+      const d = first ? 250 + Math.random() * 1800 : 2400 + Math.random() * 1500;
+      b.x = pos.x + Math.sin(a) * d;
+      b.z = pos.z + Math.cos(a) * d;
+      if (Math.hypot(b.x - -500, b.z - 1500) > 800) break;
+    }
+    b.size = 18 + Math.random() * 45;
+    b.seed = Math.random() * 100;
+  }
 
   // ---------- sound: all synthesized, no audio files ----------
   const soundBtn = document.getElementById('sound');
@@ -2193,6 +2747,9 @@ void main() {
       if (k === 'sunAzim') diff = ((diff % 360) + 540) % 360 - 180; // shortest way round
       C[k] += diff * (1 - Math.exp(-dt * rate[k]));
     }
+    const goal = CLIMATES[S.climate], ce = 1 - Math.exp(-dt * 0.8);
+    for (const k of ['tropic', 'polar', 'lat']) clim[k] += (goal[k] - clim[k]) * ce;
+    if (C.lines > 0.01 && !figuresTex) drawFigures();
 
     // waves: stronger wind -> more energy in longer, taller waves
     const amp = 0.1 * Math.pow(C.windSpeed / 5, 2);
@@ -2288,6 +2845,16 @@ void main() {
       const d = Math.hypot(b.x - pos.x, b.z - pos.z);
       if (d > b.dist * 2.5 || d < 200 || Math.hypot(b.x + 500, b.z - 1500) < 650) placeBoat(b);
     }
+    // icebergs drift slowly downwind; one that falls far behind is replaced somewhere ahead
+    if (clim.polar > 0.01) {
+      bergs.forEach((b, i) => {
+        if (!b.size) placeBerg(b, true);
+        b.x += Math.cos(wr) * 0.4 * dt;
+        b.z += Math.sin(wr) * 0.4 * dt;
+        if (Math.hypot(b.x - pos.x, b.z - pos.z) > 4200) placeBerg(b, false);
+        bergBuf.set([b.x, b.z, b.size, b.seed], i * 4);
+      });
+    } else bergs.forEach(b => { b.size = 0; });
     const fe = 1 - Math.exp(-dt * 0.15);
     flockX += (pos.x + Math.sin(yaw) * 90 - flockX) * fe;
     flockZ += (pos.z + Math.cos(yaw) * 90 - flockZ) * fe;
@@ -2302,6 +2869,7 @@ void main() {
 
     cloudT += dt * C.cloudSpeed;
     const el = C.sunElev * Math.PI / 180, az = C.sunAzim * Math.PI / 180;
+    const skyRot = real.on ? null : climateSky();
 
     const setCommon = U => {
       gl.uniform2f(U.uRes, canvas.width, canvas.height);
@@ -2326,7 +2894,11 @@ void main() {
       gl.uniform2f(U.uLife, boatAmt, birdAmt);
       gl.uniform4f(U.uMoon, real.moon[0], real.moon[1], real.moon[2], real.on ? 1 : 0);
       gl.uniform3f(U.uMoonSun, real.sun[0], real.sun[1], real.sun[2]);
-      gl.uniformMatrix3fv(U.uSkyRot, false, real.on ? real.skyRot : DEFAULT_SKY);
+      gl.uniformMatrix3fv(U.uSkyRot, false, real.on ? real.skyRot : skyRot);
+      gl.uniform1i(U.uCat, 1);
+      gl.uniform1i(U.uLines, 2);
+      gl.uniform4f(U.uClimate, clim.tropic, clim.polar, figuresTex ? C.lines : 0, 0);
+      gl.uniform4fv(U.uBergs, bergBuf);
     };
     gl.activeTexture(gl.TEXTURE0);
 
