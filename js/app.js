@@ -1047,7 +1047,15 @@
     muffle.type = 'lowpass';
     muffle.frequency.value = 20000;
     master.connect(muffle);
-    muffle.connect(ctx.destination);
+    // a gentle compressor on the way out keeps a storm big without it blasting
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -34; comp.knee.value = 12; comp.ratio.value = 4;
+    comp.attack.value = 0.02; comp.release.value = 0.4;
+    const trim = ctx.createGain(); // takes back the compressor's own make-up boost
+    trim.gain.value = 0.5;
+    comp.connect(trim);
+    trim.connect(ctx.destination);
+    muffle.connect(comp);
     audio.muffle = muffle;
     // four seconds of white noise: the raw material for surf, wind, rain and thunder
     const buf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
@@ -1056,7 +1064,7 @@
     // sounds heard from inside the water (bubbles, hum, the splash) skip the muffle
     const dry = ctx.createGain();
     dry.gain.value = 0;
-    dry.connect(ctx.destination);
+    dry.connect(comp);
     const layer = (rate, type, freq, q, out = master) => {
       const s = ctx.createBufferSource();
       s.buffer = buf; s.loop = true; s.playbackRate.value = rate;
@@ -1205,7 +1213,7 @@
     // shore surf: louder as you near the coast, coming from the island's direction
     const toShore = Math.max(0, Math.hypot(pos.x - ISLE.x, pos.z - ISLE.z) - ISLE.r * 0.95);
     const shoreNear = 1 / (1 + Math.pow(toShore / 220, 1.4));
-    audio.shoreLvl.gain.setTargetAtTime(0.9 * shoreNear * (0.45 + 0.55 * sea), now, k);
+    audio.shoreLvl.gain.setTargetAtTime(1.8 * shoreNear * (0.45 + 0.55 * sea), now, k);
     audio.shoreAir.frequency.setTargetAtTime(500 + 4500 * shoreNear, now, k);
     setPan(audio.shorePan, panTo(ISLE.x, ISLE.z) * smooth(0, 250, toShore), now);
     if ((snd.shoreT -= dt) <= 0) {
@@ -1247,8 +1255,8 @@
 
     // underwater: a pressure hum, deeper as you dive, and bubbles drifting past
     const depth = Math.max(0, -pos.y);
-    audio.hum.gain.setTargetAtTime(underwater ? 0.05 + 0.1 * smooth(0, 8, depth) : 0, now, 0.25);
-    audio.deep.g.gain.setTargetAtTime(underwater ? 0.6 + 0.6 * smooth(0, 8, depth) : 0, now, 0.25);
+    audio.hum.gain.setTargetAtTime(underwater ? 0.02 + 0.04 * smooth(0, 8, depth) : 0, now, 0.25);
+    audio.deep.g.gain.setTargetAtTime(underwater ? 0.22 + 0.22 * smooth(0, 8, depth) : 0, now, 0.25);
     if (underwater && (snd.bubbleT -= dt) <= 0) {
       snd.bubbleT = Math.random() < 0.3 ? 0.05 + Math.random() * 0.12 : 0.3 + Math.random() * 1.4;
       bubble();
@@ -1276,7 +1284,7 @@
   function foghorn(dist) {
     const ctx = audio.ctx;
     const t0 = ctx.currentTime + Math.min(dist / 343, 6);
-    const v = 0.35 / (1 + dist / 1200);
+    const v = 0.25 / (1 + dist / 1200);
     audio.hornAir.frequency.setTargetAtTime(500 + 1400 / (1 + dist / 1500), ctx.currentTime, 0.2);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t0);
